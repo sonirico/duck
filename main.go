@@ -24,6 +24,7 @@ func main() {
 
 	store := NewStore[Container](func(c Container) string { return c.ID }, func(a, b Container) bool { return a.Name < b.Name })
 	volumes := NewStore[Volume](func(v Volume) string { return v.Name }, func(a, b Volume) bool { return a.Name < b.Name })
+	networks := NewStore[Network](func(n Network) string { return n.Name }, func(a, b Network) bool { return a.Name < b.Name })
 	var p *tea.Program
 	send := func(msg any) { p.Send(msg) }
 	streamer := NewStreamer(cli, send)
@@ -32,7 +33,7 @@ func main() {
 		return string(out), err
 	})
 	p = tea.NewProgram(NewModel(streamer, tmux, cli), tea.WithAltScreen(), tea.WithMouseCellMotion())
-	watcher := NewWatcher(cli, store, volumes, send)
+	watcher := NewWatcher(cli, store, volumes, networks, send)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

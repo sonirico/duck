@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"sort"
 	"strings"
 
 	"github.com/moby/moby/api/types/container"
@@ -22,20 +23,22 @@ type watcherErrMsg struct {
 type watcherClient interface {
 	ContainerList(ctx context.Context, opts client.ContainerListOptions) (client.ContainerListResult, error)
 	VolumeList(ctx context.Context, opts client.VolumeListOptions) (client.VolumeListResult, error)
+	NetworkList(ctx context.Context, opts client.NetworkListOptions) (client.NetworkListResult, error)
 	Events(ctx context.Context, opts client.EventsListOptions) client.EventsResult
 }
 
 // Watcher feeds the store from an initial snapshot plus the Docker events
 // stream, so the UI never polls the full container list.
 type Watcher struct {
-	cli     watcherClient
-	store   *Store[Container]
-	volumes *Store[Volume]
-	send    func(msg any)
+	cli      watcherClient
+	store    *Store[Container]
+	volumes  *Store[Volume]
+	networks *Store[Network]
+	send     func(msg any)
 }
 
-func NewWatcher(cli watcherClient, store *Store[Container], volumes *Store[Volume], send func(msg any)) *Watcher {
-	return &Watcher{cli: cli, store: store, volumes: volumes, send: send}
+func NewWatcher(cli watcherClient, store *Store[Container], volumes *Store[Volume], networks *Store[Network], send func(msg any)) *Watcher {
+	return &Watcher{cli: cli, store: store, volumes: volumes, networks: networks, send: send}
 }
 
 func (w *Watcher) RunLoop(ctx context.Context) {
@@ -45,9 +48,10 @@ func (w *Watcher) RunLoop(ctx context.Context) {
 	}
 	w.send(containersMsg{containers: w.store.List()})
 	w.send(volumesMsg{volumes: w.volumes.List()})
+	w.send(networksMsg{networks: w.networks.List()})
 
 	stream := w.cli.Events(ctx, client.EventsListOptions{
-		Filters: make(client.Filters).Add("type", "container", "volume"),
+		Filters: make(client.Filters).Add("type", "container", "volume", "network"),
 	})
 	for {
 		select {
@@ -84,6 +88,16 @@ func (w *Watcher) snapshot(ctx context.Context) error {
 		vs = append(vs, newVolumeFromSummary(v))
 	}
 	w.volumes.SetAll(vs)
+
+	nres, err := w.cli.NetworkList(ctx, client.NetworkListOptions{})
+	if err != nil {
+		return err
+	}
+	ns := make([]Network, 0, len(nres.Items))
+	for _, n := range nres.Items {
+		ns = append(ns, newNetworkFromSummary(n))
+	}
+	w.networks.SetAll(ns)
 	return nil
 }
 
@@ -118,6 +132,17 @@ func (w *Watcher) apply(ctx context.Context, msg events.Message) {
 		}
 		w.volumes.SetAll(vs)
 		w.send(volumesMsg{volumes: w.volumes.List()})
+	case events.NetworkEventType:
+		res, err := w.cli.NetworkList(ctx, client.NetworkListOptions{})
+		if err != nil {
+			return
+		}
+		ns := make([]Network, 0, len(res.Items))
+		for _, n := range res.Items {
+			ns = append(ns, newNetworkFromSummary(n))
+		}
+		w.networks.SetAll(ns)
+		w.send(networksMsg{networks: w.networks.List()})
 	}
 }
 
@@ -132,14 +157,23 @@ func newContainerFromSummary(s container.Summary) Container {
 			volumes = append(volumes, m.Name)
 		}
 	}
+	var networks []string
+	if s.NetworkSettings != nil {
+		networks = make([]string, 0, len(s.NetworkSettings.Networks))
+		for name := range s.NetworkSettings.Networks {
+			networks = append(networks, name)
+		}
+		sort.Strings(networks)
+	}
 	return Container{
-		ID:      s.ID,
-		Name:    name,
-		Image:   s.Image,
-		State:   string(s.State),
-		Status:  s.Status,
-		Project: s.Labels["com.docker.compose.project"],
-		Service: s.Labels["com.docker.compose.service"],
-		Volumes: volumes,
+		ID:       s.ID,
+		Name:     name,
+		Image:    s.Image,
+		State:    string(s.State),
+		Status:   s.Status,
+		Project:  s.Labels["com.docker.compose.project"],
+		Service:  s.Labels["com.docker.compose.service"],
+		Volumes:  volumes,
+		Networks: networks,
 	}
 }
