@@ -17,6 +17,7 @@ import (
 )
 
 const testGuardTimeout = 2 * time.Second
+const testMsgBufSize = 8
 
 type testLogsClient struct {
 	inspect func(ctx context.Context, id string, opts client.ContainerInspectOptions) (client.ContainerInspectResult, error)
@@ -79,6 +80,26 @@ func inspectOK(tty bool) func(ctx context.Context, id string, opts client.Contai
 	}
 }
 
+func newTestStreamer(cli logsClient) (*Streamer, chan any) {
+	msgs := make(chan any, testMsgBufSize)
+	return NewStreamer(cli, func(msg any) { msgs <- msg }), msgs
+}
+
+func newTestRetargetHarness(t *testing.T) (*Streamer, chan any, chan *testBlockingReadCloser) {
+	t.Helper()
+	readers := make(chan *testBlockingReadCloser, 2)
+	cli := newTestLogsClient(inspectOK(false), func(ctx context.Context, id string, opts client.ContainerLogsOptions) (client.ContainerLogsResult, error) {
+		r := newTestBlockingReadCloser(ctx)
+		readers <- r
+		return r, nil
+	})
+	s, msgs := newTestStreamer(cli)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go s.RunLoop(ctx)
+	return s, msgs, readers
+}
+
 func recvLine(t *testing.T, msgs chan any) logLineMsg {
 	t.Helper()
 	select {
@@ -101,8 +122,7 @@ func TestStreamer(t *testing.T) {
 		cli := newTestLogsClient(inspectOK(false), func(ctx context.Context, id string, opts client.ContainerLogsOptions) (client.ContainerLogsResult, error) {
 			return io.NopCloser(bytes.NewReader(frames)), nil
 		})
-		msgs := make(chan any, 8)
-		s := NewStreamer(cli, func(msg any) { msgs <- msg })
+		s, msgs := newTestStreamer(cli)
 		target := LogTarget{ID: "c1", Name: "web"}
 
 		s.stream(context.Background(), target)
@@ -118,8 +138,7 @@ func TestStreamer(t *testing.T) {
 		cli := newTestLogsClient(inspectOK(true), func(ctx context.Context, id string, opts client.ContainerLogsOptions) (client.ContainerLogsResult, error) {
 			return io.NopCloser(bytes.NewReader(raw)), nil
 		})
-		msgs := make(chan any, 8)
-		s := NewStreamer(cli, func(msg any) { msgs <- msg })
+		s, msgs := newTestStreamer(cli)
 		target := LogTarget{ID: "c1", Name: "web"}
 
 		s.stream(context.Background(), target)
@@ -134,8 +153,7 @@ func TestStreamer(t *testing.T) {
 		cli := newTestLogsClient(inspectOK(false), func(ctx context.Context, id string, opts client.ContainerLogsOptions) (client.ContainerLogsResult, error) {
 			return nil, errors.New("boom")
 		})
-		msgs := make(chan any, 8)
-		s := NewStreamer(cli, func(msg any) { msgs <- msg })
+		s, msgs := newTestStreamer(cli)
 		target := LogTarget{ID: "c1", Name: "web"}
 
 		s.stream(context.Background(), target)
@@ -145,24 +163,34 @@ func TestStreamer(t *testing.T) {
 		assert.Contains(t, line.line, "duck: logs:")
 	})
 
-	t.Run("retarget cancels previous stream", func(t *testing.T) {
-		readers := make(chan *testBlockingReadCloser, 2)
-		cli := newTestLogsClient(inspectOK(false), func(ctx context.Context, id string, opts client.ContainerLogsOptions) (client.ContainerLogsResult, error) {
-			r := newTestBlockingReadCloser(ctx)
-			readers <- r
-			return r, nil
-		})
-		msgs := make(chan any, 8)
-		s := NewStreamer(cli, func(msg any) { msgs <- msg })
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		go s.RunLoop(ctx)
+	t.Run("retarget emits reset message per selection", func(t *testing.T) {
+		s, msgs, readers := newTestRetargetHarness(t)
 
 		first := LogTarget{ID: "c1", Name: "first"}
 		s.SetTargets([]LogTarget{first})
 
 		reset := recvReset(t, msgs)
 		assert.Equal(t, []LogTarget{first}, reset.targets)
+
+		select {
+		case <-readers:
+		case <-time.After(testGuardTimeout):
+			t.Fatal("timed out waiting for first stream's reader")
+		}
+
+		second := LogTarget{ID: "c2", Name: "second"}
+		s.SetTargets([]LogTarget{second})
+
+		reset = recvReset(t, msgs)
+		assert.Equal(t, []LogTarget{second}, reset.targets)
+	})
+
+	t.Run("retarget cancels previous stream", func(t *testing.T) {
+		s, msgs, readers := newTestRetargetHarness(t)
+
+		first := LogTarget{ID: "c1", Name: "first"}
+		s.SetTargets([]LogTarget{first})
+		recvReset(t, msgs)
 
 		var firstReader *testBlockingReadCloser
 		select {
@@ -173,9 +201,7 @@ func TestStreamer(t *testing.T) {
 
 		second := LogTarget{ID: "c2", Name: "second"}
 		s.SetTargets([]LogTarget{second})
-
-		reset = recvReset(t, msgs)
-		assert.Equal(t, []LogTarget{second}, reset.targets)
+		recvReset(t, msgs)
 
 		select {
 		case <-firstReader.cancelled:
