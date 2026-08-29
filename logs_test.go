@@ -100,17 +100,34 @@ func newTestRetargetHarness(t *testing.T) (*Streamer, chan any, chan *testBlocki
 	return s, msgs, readers
 }
 
-func recvLine(t *testing.T, msgs chan any) logLineMsg {
+func recvMsg[T any](t *testing.T, msgs chan any) T {
 	t.Helper()
 	select {
 	case msg := <-msgs:
-		line, ok := msg.(logLineMsg)
-		require.True(t, ok, "expected logLineMsg, got %T", msg)
-		return line
+		v, ok := msg.(T)
+		require.True(t, ok, "expected %T, got %T", v, msg)
+		return v
 	case <-time.After(testGuardTimeout):
-		t.Fatal("timed out waiting for logLineMsg")
-		return logLineMsg{}
+		var zero T
+		t.Fatalf("timed out waiting for %T", zero)
+		return zero
 	}
+}
+
+func recvReader(t *testing.T, readers chan *testBlockingReadCloser) *testBlockingReadCloser {
+	t.Helper()
+	select {
+	case r := <-readers:
+		return r
+	case <-time.After(testGuardTimeout):
+		t.Fatal("timed out waiting for stream's reader")
+		return nil
+	}
+}
+
+func recvLine(t *testing.T, msgs chan any) logLineMsg {
+	t.Helper()
+	return recvMsg[logLineMsg](t, msgs)
 }
 
 func TestStreamer(t *testing.T) {
@@ -172,11 +189,7 @@ func TestStreamer(t *testing.T) {
 		reset := recvReset(t, msgs)
 		assert.Equal(t, []LogTarget{first}, reset.targets)
 
-		select {
-		case <-readers:
-		case <-time.After(testGuardTimeout):
-			t.Fatal("timed out waiting for first stream's reader")
-		}
+		recvReader(t, readers)
 
 		second := LogTarget{ID: "c2", Name: "second"}
 		s.SetTargets([]LogTarget{second})
@@ -192,12 +205,7 @@ func TestStreamer(t *testing.T) {
 		s.SetTargets([]LogTarget{first})
 		recvReset(t, msgs)
 
-		var firstReader *testBlockingReadCloser
-		select {
-		case firstReader = <-readers:
-		case <-time.After(testGuardTimeout):
-			t.Fatal("timed out waiting for first stream's reader")
-		}
+		firstReader := recvReader(t, readers)
 
 		second := LogTarget{ID: "c2", Name: "second"}
 		s.SetTargets([]LogTarget{second})
@@ -213,13 +221,5 @@ func TestStreamer(t *testing.T) {
 
 func recvReset(t *testing.T, msgs chan any) logResetMsg {
 	t.Helper()
-	select {
-	case msg := <-msgs:
-		reset, ok := msg.(logResetMsg)
-		require.True(t, ok, "expected logResetMsg, got %T", msg)
-		return reset
-	case <-time.After(testGuardTimeout):
-		t.Fatal("timed out waiting for logResetMsg")
-		return logResetMsg{}
-	}
+	return recvMsg[logResetMsg](t, msgs)
 }
