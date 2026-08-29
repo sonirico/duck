@@ -15,6 +15,7 @@ A terminal UI for Docker: live container tree, aggregated stack logs, and intera
 - **Aggregated live logs**: select a stack to follow every container's logs in one merged, color-coded-per-container stream (via [`sonirico/vago/streams`](https://github.com/sonirico/vago)).
 - **Interactive exec with native tmux integration**: press `e` on a container to open a shell. Inside tmux >= 3.2 it opens a popup, >= 3.0 a split pane, otherwise it falls back to an inline `docker exec`.
 - **Correct stdout/stderr demuxing**: logs are demultiplexed with `stdcopy`, so non-TTY containers render cleanly.
+- **Volumes tab**: press 2 to list volumes with drivers and usage; unused volumes can be deleted with a y/n confirmation.
 
 ## Aggregated logs
 
@@ -45,11 +46,13 @@ just build
 | `j` / `k` | container list | move selection          |
 | `g` / `G` | container list | jump to top / bottom     |
 | `tab`     | anywhere    | switch focus between list and logs |
+| `1` / `2` | anywhere    | switch tab containers/volumes |
 | `e`       | container list | open an interactive shell in the selected container |
 | `q`       | anywhere    | quit                      |
 | `j` / `k` | logs panel  | scroll                    |
 | `g`       | logs panel  | jump to top, stop following |
 | `G`       | logs panel  | jump to bottom, resume following |
+| `d`       | volumes tab | delete unused volume (asks y/n) |
 
 ## Development
 
