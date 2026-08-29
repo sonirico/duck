@@ -18,16 +18,23 @@ type watcherErrMsg struct {
 	err error
 }
 
+// watcherClient is the subset of the docker client the Watcher depends on.
+type watcherClient interface {
+	ContainerList(ctx context.Context, opts client.ContainerListOptions) (client.ContainerListResult, error)
+	VolumeList(ctx context.Context, opts client.VolumeListOptions) (client.VolumeListResult, error)
+	Events(ctx context.Context, opts client.EventsListOptions) client.EventsResult
+}
+
 // Watcher feeds the store from an initial snapshot plus the Docker events
 // stream, so the UI never polls the full container list.
 type Watcher struct {
-	cli     client.APIClient
+	cli     watcherClient
 	store   *Store[Container]
 	volumes *Store[Volume]
 	send    func(msg any)
 }
 
-func NewWatcher(cli client.APIClient, store *Store[Container], volumes *Store[Volume], send func(msg any)) *Watcher {
+func NewWatcher(cli watcherClient, store *Store[Container], volumes *Store[Volume], send func(msg any)) *Watcher {
 	return &Watcher{cli: cli, store: store, volumes: volumes, send: send}
 }
 
