@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/moby/moby/client"
@@ -25,7 +26,11 @@ func main() {
 	var p *tea.Program
 	send := func(msg any) { p.Send(msg) }
 	streamer := NewStreamer(cli, send)
-	p = tea.NewProgram(NewModel(streamer), tea.WithAltScreen(), tea.WithMouseCellMotion())
+	tmux := NewTmuxInfo(os.Getenv, exec.LookPath, func() (string, error) {
+		out, err := exec.Command("tmux", "-V").Output()
+		return string(out), err
+	})
+	p = tea.NewProgram(NewModel(streamer, tmux), tea.WithAltScreen(), tea.WithMouseCellMotion())
 	watcher := NewWatcher(cli, store, send)
 
 	ctx, cancel := context.WithCancel(context.Background())

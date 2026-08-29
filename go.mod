@@ -8,6 +8,7 @@ require (
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/moby/moby/api v1.55.0
 	github.com/moby/moby/client v0.5.1
+	github.com/sonirico/vago v0.12.0
 	github.com/stretchr/testify v1.12.1
 )
 

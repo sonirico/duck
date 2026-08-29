@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"hash/fnv"
+	"os/exec"
 	"sort"
 	"strings"
 
@@ -69,6 +70,7 @@ type logRetargeter interface {
 
 type Model struct {
 	streamer logRetargeter
+	tmux     TmuxInfo
 
 	containers []Container
 	rows       []row
@@ -85,8 +87,8 @@ type Model struct {
 	err    error
 }
 
-func NewModel(streamer logRetargeter) Model {
-	return Model{streamer: streamer, follow: true}
+func NewModel(streamer logRetargeter, tmux TmuxInfo) Model {
+	return Model{streamer: streamer, tmux: tmux, follow: true}
 }
 
 func (m Model) Init() tea.Cmd {
@@ -201,8 +203,31 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.cursor = len(m.rows) - 1
 			return m, m.retarget()
 		}
+	case "e":
+		if m.cursor >= 0 && m.cursor < len(m.rows) && m.rows[m.cursor].kind == rowContainer {
+			return m, m.execCmd(m.rows[m.cursor].container.ID)
+		}
 	}
 	return m, nil
+}
+
+func (m Model) execCmd(id string) tea.Cmd {
+	const dockerHost = ""
+	if argv := newExecArgv(id, dockerHost, m.tmux); argv != nil {
+		cmd := exec.Command(argv[0], argv[1:]...)
+		return func() tea.Msg {
+			if err := cmd.Run(); err != nil {
+				return watcherErrMsg{err: err}
+			}
+			return nil
+		}
+	}
+	return tea.ExecProcess(exec.Command("docker", "exec", "-it", id, "sh", "-c", "command -v bash >/dev/null && exec bash || exec sh"), func(err error) tea.Msg {
+		if err != nil {
+			return watcherErrMsg{err: err}
+		}
+		return nil
+	})
 }
 
 func (m Model) retarget() tea.Cmd {
@@ -291,7 +316,7 @@ func (m Model) View() string {
 		lipgloss.NewStyle().Width(m.listWidth()+2).Render(styleTitle.Render(" containers")),
 		styleTitle.Render(truncate(title, m.logsWidth())),
 	)
-	footer := styleDim.Render(" j/k move  g/G top/bottom  tab focus  q quit")
+	footer := styleDim.Render(" j/k move  g/G top/bottom  tab focus  e exec  q quit")
 
 	return header + "\n" + titles + "\n" +
 		lipgloss.JoinHorizontal(lipgloss.Top, left, right) + "\n" + footer
