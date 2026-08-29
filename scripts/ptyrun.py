@@ -5,9 +5,13 @@ fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 140, 0, 0))
 p = subprocess.Popen([sys.argv[1]], stdin=slave, stdout=slave, stderr=slave, close_fds=True)
 os.close(slave)
 out = b""
-deadline = time.time() + float(sys.argv[3]) if len(sys.argv) > 3 else time.time() + 4
+start = time.time()
+deadline = start + float(sys.argv[3]) if len(sys.argv) > 3 else start + 4
+keys = sys.argv[4] if len(sys.argv) > 4 else ""
+key_idx = 0
+next_key_time = start + 2
 while time.time() < deadline:
-    r, _, _ = select.select([master], [], [], 0.2)
+    r, _, _ = select.select([master], [], [], 0.1)
     if master in r:
         try:
             chunk = os.read(master, 65536)
@@ -16,6 +20,13 @@ while time.time() < deadline:
         if not chunk:
             break
         out += chunk
+    if key_idx < len(keys) and time.time() >= next_key_time:
+        try:
+            os.write(master, keys[key_idx].encode())
+        except OSError:
+            break
+        key_idx += 1
+        next_key_time += 0.15
 try:
     os.write(master, b"q")
     time.sleep(0.3)

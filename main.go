@@ -31,7 +31,7 @@ func main() {
 		out, err := exec.Command("tmux", "-V").Output()
 		return string(out), err
 	})
-	p = tea.NewProgram(NewModel(streamer, tmux), tea.WithAltScreen(), tea.WithMouseCellMotion())
+	p = tea.NewProgram(NewModel(streamer, tmux, cli), tea.WithAltScreen(), tea.WithMouseCellMotion())
 	watcher := NewWatcher(cli, store, volumes, send)
 
 	ctx, cancel := context.WithCancel(context.Background())

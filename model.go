@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"hash/fnv"
 	"os/exec"
@@ -10,6 +11,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/moby/moby/client"
 )
 
 const maxLogLines = 2000
@@ -59,6 +61,17 @@ const (
 	focusLogs
 )
 
+const (
+	tabContainers int = iota
+	tabVolumes
+)
+
+type pendingDelete struct {
+	kind  string
+	id    string
+	label string
+}
+
 type logLine struct {
 	source string
 	line   string
@@ -68,14 +81,27 @@ type logRetargeter interface {
 	SetTargets(ts []LogTarget)
 }
 
+// resourceClient is the subset of the docker client the Model depends on to
+// mutate resources (e.g. deleting a volume).
+type resourceClient interface {
+	VolumeRemove(ctx context.Context, volumeID string, options client.VolumeRemoveOptions) (client.VolumeRemoveResult, error)
+}
+
 type Model struct {
-	streamer logRetargeter
-	tmux     TmuxInfo
+	streamer  logRetargeter
+	tmux      TmuxInfo
+	resources resourceClient
+
+	tab int
 
 	containers []Container
 	rows       []row
 	cursor     int
 	focus      focusArea
+
+	volumes   []Volume
+	volCursor int
+	confirm   *pendingDelete
 
 	logs     []logLine
 	logTitle string
@@ -87,8 +113,8 @@ type Model struct {
 	err    error
 }
 
-func NewModel(streamer logRetargeter, tmux TmuxInfo) Model {
-	return Model{streamer: streamer, tmux: tmux, follow: true}
+func NewModel(streamer logRetargeter, tmux TmuxInfo, resources resourceClient) Model {
+	return Model{streamer: streamer, tmux: tmux, resources: resources, follow: true}
 }
 
 func (m Model) Init() tea.Cmd {
@@ -112,6 +138,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.cursor = indexOfKey(m.rows, prevKey)
 		if prevKey == "" || m.selectedKey() != prevKey {
 			return m, m.retarget()
+		}
+		return m, nil
+
+	case volumesMsg:
+		m.volumes = msg.volumes
+		if m.volCursor >= len(m.volumes) {
+			m.volCursor = len(m.volumes) - 1
+		}
+		if m.volCursor < 0 {
+			m.volCursor = 0
 		}
 		return m, nil
 
@@ -165,6 +201,23 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	if m.focus == focusList {
+		switch msg.String() {
+		case "1":
+			m.tab = tabContainers
+			m.confirm = nil
+			return m, m.retarget()
+		case "2":
+			m.tab = tabVolumes
+			m.confirm = nil
+			return m, nil
+		}
+	}
+
+	if m.tab == tabVolumes {
+		return m.updateVolumeKeys(msg)
+	}
+
 	if m.focus == focusLogs {
 		switch msg.String() {
 		case "G":
@@ -207,6 +260,57 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.cursor >= 0 && m.cursor < len(m.rows) && m.rows[m.cursor].kind == rowContainer {
 			return m, m.execCmd(m.rows[m.cursor].container.ID)
 		}
+	}
+	return m, nil
+}
+
+func (m Model) updateVolumeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "j", "down":
+		if m.volCursor < len(m.volumes)-1 {
+			m.volCursor++
+		}
+		return m, nil
+	case "k", "up":
+		if m.volCursor > 0 {
+			m.volCursor--
+		}
+		return m, nil
+	case "g":
+		if len(m.volumes) > 0 {
+			m.volCursor = 0
+		}
+		return m, nil
+	case "G":
+		if len(m.volumes) > 0 {
+			m.volCursor = len(m.volumes) - 1
+		}
+		return m, nil
+	case "d":
+		if m.confirm != nil || m.volCursor < 0 || m.volCursor >= len(m.volumes) {
+			return m, nil
+		}
+		v := m.volumes[m.volCursor]
+		if volumeUsedBy(m.volumes, m.containers)[v.Name] == 0 {
+			m.confirm = &pendingDelete{kind: "volume", id: v.Name, label: v.Name}
+		}
+		return m, nil
+	case "y":
+		if m.confirm == nil {
+			return m, nil
+		}
+		id := m.confirm.id
+		resources := m.resources
+		m.confirm = nil
+		return m, func() tea.Msg {
+			if _, err := resources.VolumeRemove(context.Background(), id, client.VolumeRemoveOptions{}); err != nil {
+				return watcherErrMsg{err: err}
+			}
+			return nil
+		}
+	case "n", "esc":
+		m.confirm = nil
+		return m, nil
 	}
 	return m, nil
 }
@@ -301,8 +405,13 @@ func (m Model) View() string {
 	}
 
 	list := m.renderList()
+	rightContent := m.viewport.View()
+	if m.tab == tabVolumes {
+		list = m.renderVolumeList()
+		rightContent = m.renderVolumeDetail()
+	}
 	left := m.paneStyle(focusList).Width(m.listWidth()).Height(m.panesHeight()).Render(list)
-	right := m.paneStyle(focusLogs).Width(m.logsWidth()).Height(m.panesHeight()).Render(m.viewport.View())
+	right := m.paneStyle(focusLogs).Width(m.logsWidth()).Height(m.panesHeight()).Render(rightContent)
 
 	header := styleHeader.Render(fmt.Sprintf(" duck  %d containers", len(m.containers)))
 	if m.err != nil {
@@ -316,10 +425,23 @@ func (m Model) View() string {
 		lipgloss.NewStyle().Width(m.listWidth()+2).Render(styleTitle.Render(" containers")),
 		styleTitle.Render(truncate(title, m.logsWidth())),
 	)
-	footer := styleDim.Render(" j/k move  g/G top/bottom  tab focus  e exec  q quit")
+
+	var footer string
+	if m.tab == tabVolumes {
+		footer = " j/k move  1/2 tab  d delete  q quit"
+		if m.confirm != nil {
+			footer += "  delete " + m.confirm.label + "? y/n"
+		} else if m.volCursor >= 0 && m.volCursor < len(m.volumes) {
+			if volumeUsedBy(m.volumes, m.containers)[m.volumes[m.volCursor].Name] > 0 {
+				footer += "  d: volume in use"
+			}
+		}
+	} else {
+		footer = " j/k move  g/G top/bottom  tab focus  e exec  1/2 tab  q quit"
+	}
 
 	return header + "\n" + titles + "\n" +
-		lipgloss.JoinHorizontal(lipgloss.Top, left, right) + "\n" + footer
+		lipgloss.JoinHorizontal(lipgloss.Top, left, right) + "\n" + styleDim.Render(footer)
 }
 
 func (m Model) renderList() string {
@@ -354,6 +476,71 @@ func (m Model) renderList() string {
 	if len(m.rows) == 0 {
 		b.WriteString(styleDim.Render("no containers"))
 	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func (m Model) renderVolumeList() string {
+	var b strings.Builder
+	w := m.listWidth()
+	used := volumeUsedBy(m.volumes, m.containers)
+	for i, v := range m.volumes {
+		line := truncate(formatVolumeRow(v, used[v.Name]), w)
+		if i == m.volCursor {
+			line = styleSelected.Render(fmt.Sprintf("%-*s", w, line))
+		}
+		b.WriteString(line)
+		b.WriteString("\n")
+	}
+	if len(m.volumes) == 0 {
+		b.WriteString(styleDim.Render("no volumes"))
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func formatVolumeRow(v Volume, used int) string {
+	return fmt.Sprintf("%s  %s  used-by:%d", v.Name, v.Driver, used)
+}
+
+func (m Model) renderVolumeDetail() string {
+	if m.volCursor < 0 || m.volCursor >= len(m.volumes) {
+		return styleDim.Render("no volumes")
+	}
+	v := m.volumes[m.volCursor]
+
+	var b strings.Builder
+	b.WriteString("name: " + v.Name + "\n")
+	b.WriteString("driver: " + v.Driver + "\n")
+	b.WriteString("mountpoint: " + v.Mountpoint + "\n")
+	b.WriteString("created: " + v.Created + "\n")
+
+	if len(v.Labels) > 0 {
+		keys := make([]string, 0, len(v.Labels))
+		for k := range v.Labels {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		b.WriteString("labels:\n")
+		for _, k := range keys {
+			b.WriteString("  " + k + "=" + v.Labels[k] + "\n")
+		}
+	}
+
+	var users []string
+	for _, c := range m.containers {
+		for _, name := range c.Volumes {
+			if name == v.Name {
+				users = append(users, c.Name)
+				break
+			}
+		}
+	}
+	if len(users) > 0 {
+		b.WriteString("used by:\n")
+		for _, name := range users {
+			b.WriteString("  " + name + "\n")
+		}
+	}
+
 	return strings.TrimRight(b.String(), "\n")
 }
 
