@@ -22,7 +22,7 @@ func main() {
 		}
 	}()
 
-	store := NewStore()
+	store := NewStore[Container](func(c Container) string { return c.ID }, func(a, b Container) bool { return a.Name < b.Name })
 	var p *tea.Program
 	send := func(msg any) { p.Send(msg) }
 	streamer := NewStreamer(cli, send)

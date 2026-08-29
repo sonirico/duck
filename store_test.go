@@ -10,12 +10,16 @@ func newTestContainer(id, name string) Container {
 	return Container{ID: id, Name: name, Image: "img", State: "running"}
 }
 
+func newTestContainerStore() *Store[Container] {
+	return NewStore[Container](func(c Container) string { return c.ID }, func(a, b Container) bool { return a.Name < b.Name })
+}
+
 func TestStore(t *testing.T) {
 	t.Parallel()
 
 	t.Run("List returns containers sorted by name", func(t *testing.T) {
 		t.Parallel()
-		s := NewStore()
+		s := newTestContainerStore()
 		s.SetAll([]Container{newTestContainer("2", "beta"), newTestContainer("1", "alpha")})
 
 		got := s.List()
@@ -27,7 +31,7 @@ func TestStore(t *testing.T) {
 
 	t.Run("Upsert replaces an existing container by ID", func(t *testing.T) {
 		t.Parallel()
-		s := NewStore()
+		s := newTestContainerStore()
 		s.SetAll([]Container{newTestContainer("1", "alpha")})
 
 		updated := newTestContainer("1", "alpha")
@@ -41,7 +45,7 @@ func TestStore(t *testing.T) {
 
 	t.Run("Delete removes a container by ID", func(t *testing.T) {
 		t.Parallel()
-		s := NewStore()
+		s := newTestContainerStore()
 		s.SetAll([]Container{newTestContainer("1", "alpha"), newTestContainer("2", "beta")})
 
 		s.Delete("1")
@@ -53,7 +57,7 @@ func TestStore(t *testing.T) {
 
 	t.Run("SetAll replaces the previous contents", func(t *testing.T) {
 		t.Parallel()
-		s := NewStore()
+		s := newTestContainerStore()
 		s.SetAll([]Container{newTestContainer("1", "alpha")})
 
 		s.SetAll([]Container{newTestContainer("2", "beta")})
@@ -61,5 +65,18 @@ func TestStore(t *testing.T) {
 		got := s.List()
 		require.Len(t, got, 1)
 		require.Equal(t, "beta", got[0].Name)
+	})
+
+	t.Run("generic store with another type", func(t *testing.T) {
+		t.Parallel()
+		type testItem struct{ id, name string }
+		s := NewStore[testItem](func(i testItem) string { return i.id }, func(a, b testItem) bool { return a.name < b.name })
+		s.SetAll([]testItem{{id: "2", name: "beta"}, {id: "1", name: "alpha"}})
+
+		got := s.List()
+
+		require.Len(t, got, 2)
+		require.Equal(t, "alpha", got[0].name)
+		require.Equal(t, "beta", got[1].name)
 	})
 }

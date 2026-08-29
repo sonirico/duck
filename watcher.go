@@ -21,11 +21,11 @@ type watcherErrMsg struct {
 // stream, so the UI never polls the full container list.
 type Watcher struct {
 	cli   client.APIClient
-	store *Store
+	store *Store[Container]
 	send  func(msg any)
 }
 
-func NewWatcher(cli client.APIClient, store *Store, send func(msg any)) *Watcher {
+func NewWatcher(cli client.APIClient, store *Store[Container], send func(msg any)) *Watcher {
 	return &Watcher{cli: cli, store: store, send: send}
 }
 
