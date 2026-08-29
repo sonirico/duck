@@ -13,6 +13,7 @@ type Container struct {
 	Status  string
 	Project string
 	Service string
+	Volumes []string
 }
 
 type Store[T any] struct {
