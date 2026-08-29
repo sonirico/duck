@@ -1,12 +1,12 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"io"
 
 	"github.com/moby/moby/api/pkg/stdcopy"
 	"github.com/moby/moby/client"
+	"github.com/sonirico/vago/streams"
 )
 
 type LogTarget struct {
@@ -23,15 +23,21 @@ type logLineMsg struct {
 	line   string
 }
 
+// logsClient is the subset of the docker client the Streamer depends on.
+type logsClient interface {
+	ContainerInspect(ctx context.Context, id string, opts client.ContainerInspectOptions) (client.ContainerInspectResult, error)
+	ContainerLogs(ctx context.Context, id string, opts client.ContainerLogsOptions) (client.ContainerLogsResult, error)
+}
+
 // Streamer follows the logs of the selected containers and pumps each line
 // into the UI. Retargeting cancels the streams of the previous selection.
 type Streamer struct {
-	cli     client.APIClient
+	cli     logsClient
 	send    func(msg any)
 	targets chan []LogTarget
 }
 
-func NewStreamer(cli client.APIClient, send func(msg any)) *Streamer {
+func NewStreamer(cli logsClient, send func(msg any)) *Streamer {
 	return &Streamer{cli: cli, send: send, targets: make(chan []LogTarget, 1)}
 }
 
@@ -114,13 +120,15 @@ func (s *Streamer) stream(ctx context.Context, t LogTarget) {
 		r = pr
 	}
 
-	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	for sc.Scan() {
-		s.sendLine(ctx, t, sc.Text())
+	st := streams.Lines(r)
+	for st.Next(ctx) {
+		s.sendLine(ctx, t, st.Data())
 	}
-	if err := sc.Err(); err != nil {
+	if err := st.Err(); err != nil {
 		s.sendLine(ctx, t, "duck: read logs: "+err.Error())
+	}
+	if err := st.Close(); err != nil && ctx.Err() == nil {
+		s.sendLine(ctx, t, "duck: close log stream: "+err.Error())
 	}
 }
 
