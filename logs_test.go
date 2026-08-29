@@ -130,6 +130,11 @@ func recvLine(t *testing.T, msgs chan any) logLineMsg {
 	return recvMsg[logLineMsg](t, msgs)
 }
 
+func recvReset(t *testing.T, msgs chan any) logResetMsg {
+	t.Helper()
+	return recvMsg[logResetMsg](t, msgs)
+}
+
 func TestStreamer(t *testing.T) {
 	t.Run("demux multiplexed stream", func(t *testing.T) {
 		frames := append(
@@ -217,9 +222,4 @@ func TestStreamer(t *testing.T) {
 			t.Fatal("timed out waiting for first stream to be cancelled")
 		}
 	})
-}
-
-func recvReset(t *testing.T, msgs chan any) logResetMsg {
-	t.Helper()
-	return recvMsg[logResetMsg](t, msgs)
 }
