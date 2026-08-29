@@ -159,6 +159,20 @@ func TestNewContainerFromSummary(t *testing.T) {
 			in:   container.Summary{ID: "c3", Names: []string{"/db"}},
 			want: Container{ID: "c3", Name: "db", Volumes: []string{}},
 		},
+		{
+			name: "with network settings",
+			in: container.Summary{
+				ID:    "c4",
+				Names: []string{"/api"},
+				NetworkSettings: &container.NetworkSettingsSummary{
+					Networks: map[string]*network.EndpointSettings{
+						"web":     {},
+						"backend": {},
+					},
+				},
+			},
+			want: Container{ID: "c4", Name: "api", Volumes: []string{}, Networks: []string{"backend", "web"}},
+		},
 	}
 
 	for _, tc := range tests {
@@ -219,6 +233,36 @@ func TestWatcherSnapshot(t *testing.T) {
 		assert.Equal(t, wantErr, err)
 		assert.Len(t, store.List(), 1)
 		assert.Empty(t, volumes.List())
+	})
+
+	t.Run("network list error", func(t *testing.T) {
+		t.Parallel()
+
+		wantErr := errors.New("boom")
+		cli := newTestWatcherClient(containerListOK(), volumeListOK(), networkListErr(wantErr), nil)
+		w, _, _, _, networks := newTestWatcher(cli)
+
+		err := w.snapshot(context.Background())
+
+		assert.Equal(t, wantErr, err)
+		assert.Empty(t, networks.List())
+	})
+
+	t.Run("success populates networks store", func(t *testing.T) {
+		t.Parallel()
+
+		cli := newTestWatcherClient(
+			containerListOK(),
+			volumeListOK(),
+			networkListOK(network.Summary{Network: network.Network{Name: "bridge"}}),
+			nil,
+		)
+		w, _, _, _, networks := newTestWatcher(cli)
+
+		err := w.snapshot(context.Background())
+
+		require.NoError(t, err)
+		assert.Equal(t, []Network{{Name: "bridge"}}, networks.List())
 	})
 }
 
