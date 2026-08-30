@@ -27,15 +27,20 @@ type testResourceCall struct {
 }
 
 type testResourceClient struct {
-	volumeRemove  func(ctx context.Context, volumeID string, options client.VolumeRemoveOptions) (client.VolumeRemoveResult, error)
-	networkRemove func(ctx context.Context, networkID string, options client.NetworkRemoveOptions) (client.NetworkRemoveResult, error)
-	calls         []testResourceCall
+	volumeRemove   func(ctx context.Context, volumeID string, options client.VolumeRemoveOptions) (client.VolumeRemoveResult, error)
+	networkRemove  func(ctx context.Context, networkID string, options client.NetworkRemoveOptions) (client.NetworkRemoveResult, error)
+	containerOpErr error
+	calls          []testResourceCall
 }
 
 func newTestResourceClient(
 	volumeRemove func(ctx context.Context, volumeID string, options client.VolumeRemoveOptions) (client.VolumeRemoveResult, error),
 ) *testResourceClient {
 	return &testResourceClient{volumeRemove: volumeRemove}
+}
+
+func newTestResourceClientWithContainerOpErr(err error) *testResourceClient {
+	return &testResourceClient{containerOpErr: err}
 }
 
 func (c *testResourceClient) VolumeRemove(ctx context.Context, volumeID string, options client.VolumeRemoveOptions) (client.VolumeRemoveResult, error) {
@@ -48,32 +53,32 @@ func (c *testResourceClient) NetworkRemove(ctx context.Context, networkID string
 
 func (c *testResourceClient) ContainerStart(ctx context.Context, containerID string, options client.ContainerStartOptions) (client.ContainerStartResult, error) {
 	c.calls = append(c.calls, testResourceCall{method: "start", id: containerID})
-	return client.ContainerStartResult{}, nil
+	return client.ContainerStartResult{}, c.containerOpErr
 }
 
 func (c *testResourceClient) ContainerStop(ctx context.Context, containerID string, options client.ContainerStopOptions) (client.ContainerStopResult, error) {
 	c.calls = append(c.calls, testResourceCall{method: "stop", id: containerID})
-	return client.ContainerStopResult{}, nil
+	return client.ContainerStopResult{}, c.containerOpErr
 }
 
 func (c *testResourceClient) ContainerRestart(ctx context.Context, containerID string, options client.ContainerRestartOptions) (client.ContainerRestartResult, error) {
 	c.calls = append(c.calls, testResourceCall{method: "restart", id: containerID})
-	return client.ContainerRestartResult{}, nil
+	return client.ContainerRestartResult{}, c.containerOpErr
 }
 
 func (c *testResourceClient) ContainerKill(ctx context.Context, containerID string, options client.ContainerKillOptions) (client.ContainerKillResult, error) {
 	c.calls = append(c.calls, testResourceCall{method: "kill", id: containerID})
-	return client.ContainerKillResult{}, nil
+	return client.ContainerKillResult{}, c.containerOpErr
 }
 
 func (c *testResourceClient) ContainerPause(ctx context.Context, containerID string, options client.ContainerPauseOptions) (client.ContainerPauseResult, error) {
 	c.calls = append(c.calls, testResourceCall{method: "pause", id: containerID})
-	return client.ContainerPauseResult{}, nil
+	return client.ContainerPauseResult{}, c.containerOpErr
 }
 
 func (c *testResourceClient) ContainerUnpause(ctx context.Context, containerID string, options client.ContainerUnpauseOptions) (client.ContainerUnpauseResult, error) {
 	c.calls = append(c.calls, testResourceCall{method: "unpause", id: containerID})
-	return client.ContainerUnpauseResult{}, nil
+	return client.ContainerUnpauseResult{}, c.containerOpErr
 }
 
 func newTestModel(streamer logRetargeter, resources resourceClient) Model {
@@ -473,6 +478,23 @@ func TestContainerOpKeys(t *testing.T) {
 			m = got.(Model)
 		}
 		assert.Empty(t, resources.calls)
+	})
+
+	t.Run("returns a watcherErrMsg when the container op fails", func(t *testing.T) {
+		t.Parallel()
+
+		wantErr := errors.New("boom")
+		resources := newTestResourceClientWithContainerOpErr(wantErr)
+		m := newTestModel(newTestLogRetargeter(), resources)
+		m.tab = tabContainers
+		m.focus = focusList
+		m.rows = []row{{kind: rowContainer, key: "id:c1", container: Container{ID: "c1", State: "running"}}}
+		m.cursor = 0
+
+		_, cmd := m.updateKeys(newTestKeyMsg("s"))
+
+		require.NotNil(t, cmd)
+		assert.Equal(t, watcherErrMsg{err: wantErr}, cmd())
 	})
 }
 
