@@ -31,6 +31,7 @@ type testResourceCall struct {
 type testResourceClient struct {
 	volumeRemove     func(ctx context.Context, volumeID string, options client.VolumeRemoveOptions) (client.VolumeRemoveResult, error)
 	networkRemove    func(ctx context.Context, networkID string, options client.NetworkRemoveOptions) (client.NetworkRemoveResult, error)
+	imageRemove      func(ctx context.Context, imageID string, options client.ImageRemoveOptions) (client.ImageRemoveResult, error)
 	containerOpErr   error
 	containerInspect client.ContainerInspectResult
 	imageInspect     client.ImageInspectResult
@@ -65,6 +66,10 @@ func (c *testResourceClient) VolumeRemove(ctx context.Context, volumeID string, 
 
 func (c *testResourceClient) NetworkRemove(ctx context.Context, networkID string, options client.NetworkRemoveOptions) (client.NetworkRemoveResult, error) {
 	return c.networkRemove(ctx, networkID, options)
+}
+
+func (c *testResourceClient) ImageRemove(ctx context.Context, imageID string, options client.ImageRemoveOptions) (client.ImageRemoveResult, error) {
+	return c.imageRemove(ctx, imageID, options)
 }
 
 func (c *testResourceClient) ContainerStart(ctx context.Context, containerID string, options client.ContainerStartOptions) (client.ContainerStartResult, error) {
@@ -191,6 +196,40 @@ func TestFormatNetworkRow(t *testing.T) {
 	}
 }
 
+func TestFormatImageRow(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		img  Image
+		used int
+		want string
+	}{
+		{
+			name: "unused image",
+			img:  Image{RepoTag: "nginx:latest", Size: 125_300_000},
+			used: 0,
+			want: "nginx:latest  125.3MB  used-by:0",
+		},
+		{
+			name: "image used by two containers",
+			img:  Image{RepoTag: "redis:7", Size: 2_000_000},
+			used: 2,
+			want: "redis:7  2.0MB  used-by:2",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := formatImageRow(tc.img, tc.used)
+
+			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
 func TestNewModel(t *testing.T) {
 	t.Parallel()
 
@@ -298,6 +337,52 @@ func TestUpdate(t *testing.T) {
 			})
 		}
 	})
+
+	t.Run("imagesMsg clamps the cursor to a valid range", func(t *testing.T) {
+		t.Parallel()
+
+		tests := []struct {
+			name       string
+			imgCursor  int
+			images     []Image
+			wantCursor int
+		}{
+			{
+				name:       "cursor within bounds is kept",
+				imgCursor:  1,
+				images:     []Image{{ID: "a"}, {ID: "b"}, {ID: "c"}},
+				wantCursor: 1,
+			},
+			{
+				name:       "cursor past the end clamps to the last image",
+				imgCursor:  5,
+				images:     []Image{{ID: "a"}, {ID: "b"}},
+				wantCursor: 1,
+			},
+			{
+				name:       "cursor clamps to zero when images become empty",
+				imgCursor:  2,
+				images:     nil,
+				wantCursor: 0,
+			},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+				m.imgCursor = tc.imgCursor
+
+				got, cmd := m.Update(imagesMsg{images: tc.images})
+
+				gotModel := got.(Model)
+				assert.Equal(t, tc.images, gotModel.images)
+				assert.Equal(t, tc.wantCursor, gotModel.imgCursor)
+				assert.Nil(t, cmd)
+			})
+		}
+	})
 }
 
 func TestUpdateKeys(t *testing.T) {
@@ -352,6 +437,22 @@ func TestUpdateKeys(t *testing.T) {
 		assert.Nil(t, cmd)
 	})
 
+	t.Run("4 switches focus-list to the images tab and resets confirm", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		m.focus = focusList
+		m.tab = tabContainers
+		m.confirm = &pendingDelete{kind: deleteImage, id: "img1"}
+
+		got, cmd := m.updateKeys(newTestKeyMsg("4"))
+
+		gotModel := got.(Model)
+		assert.Equal(t, tabImages, gotModel.tab)
+		assert.Nil(t, gotModel.confirm)
+		assert.Nil(t, cmd)
+	})
+
 	t.Run("volumes tab delegates other keys to updateVolumeKeys", func(t *testing.T) {
 		t.Parallel()
 
@@ -380,6 +481,20 @@ func TestUpdateKeys(t *testing.T) {
 		assert.Nil(t, cmd)
 	})
 
+	t.Run("images tab delegates other keys to updateImageKeys", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		m.tab = tabImages
+		m.images = []Image{{ID: "a"}, {ID: "b"}}
+		m.imgCursor = 0
+
+		got, cmd := m.updateKeys(newTestKeyMsg("j"))
+
+		assert.Equal(t, 1, got.(Model).imgCursor)
+		assert.Nil(t, cmd)
+	})
+
 	t.Run("right moves from containers to volumes tab", func(t *testing.T) {
 		t.Parallel()
 
@@ -395,12 +510,27 @@ func TestUpdateKeys(t *testing.T) {
 		assert.Nil(t, cmd)
 	})
 
-	t.Run("right wraps from networks back to containers", func(t *testing.T) {
+	t.Run("right moves from networks to images tab", func(t *testing.T) {
 		t.Parallel()
 
 		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
 		m.focus = focusList
 		m.tab = tabNetworks
+
+		got, cmd := m.updateKeys(newTestKeyMsg("right"))
+
+		gotModel := got.(Model)
+		assert.Equal(t, tabImages, gotModel.tab)
+		assert.Nil(t, gotModel.confirm)
+		assert.Nil(t, cmd)
+	})
+
+	t.Run("right wraps from images back to containers", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		m.focus = focusList
+		m.tab = tabImages
 		m.rows = []row{{kind: rowContainer, key: "id:c1"}}
 
 		got, cmd := m.updateKeys(newTestKeyMsg("right"))
@@ -411,7 +541,7 @@ func TestUpdateKeys(t *testing.T) {
 		require.NotNil(t, cmd)
 	})
 
-	t.Run("left wraps from containers back to networks", func(t *testing.T) {
+	t.Run("left wraps from containers back to images", func(t *testing.T) {
 		t.Parallel()
 
 		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
@@ -421,7 +551,7 @@ func TestUpdateKeys(t *testing.T) {
 		got, cmd := m.updateKeys(newTestKeyMsg("left"))
 
 		gotModel := got.(Model)
-		assert.Equal(t, tabNetworks, gotModel.tab)
+		assert.Equal(t, tabImages, gotModel.tab)
 		assert.Nil(t, gotModel.confirm)
 		assert.Nil(t, cmd)
 	})
@@ -1029,6 +1159,257 @@ func TestUpdateVolumeKeys(t *testing.T) {
 	})
 }
 
+func TestUpdateImageKeys(t *testing.T) {
+	t.Parallel()
+
+	t.Run("j moves the cursor down until the last image", func(t *testing.T) {
+		t.Parallel()
+
+		tests := []struct {
+			name       string
+			imgCursor  int
+			wantCursor int
+		}{
+			{name: "advances from the first image", imgCursor: 0, wantCursor: 1},
+			{name: "stays at the last image", imgCursor: 1, wantCursor: 1},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+				m.images = []Image{{ID: "a"}, {ID: "b"}}
+				m.imgCursor = tc.imgCursor
+
+				got, cmd := m.updateImageKeys(newTestKeyMsg("j"))
+
+				assert.Equal(t, tc.wantCursor, got.(Model).imgCursor)
+				assert.Nil(t, cmd)
+			})
+		}
+	})
+
+	t.Run("k moves the cursor up until the first image", func(t *testing.T) {
+		t.Parallel()
+
+		tests := []struct {
+			name       string
+			imgCursor  int
+			wantCursor int
+		}{
+			{name: "retreats from the last image", imgCursor: 1, wantCursor: 0},
+			{name: "stays at the first image", imgCursor: 0, wantCursor: 0},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+				m.images = []Image{{ID: "a"}, {ID: "b"}}
+				m.imgCursor = tc.imgCursor
+
+				got, cmd := m.updateImageKeys(newTestKeyMsg("k"))
+
+				assert.Equal(t, tc.wantCursor, got.(Model).imgCursor)
+				assert.Nil(t, cmd)
+			})
+		}
+	})
+
+	t.Run("g jumps to the first image when images exist", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		m.images = []Image{{ID: "a"}, {ID: "b"}}
+		m.imgCursor = 1
+
+		got, cmd := m.updateImageKeys(newTestKeyMsg("g"))
+
+		assert.Equal(t, 0, got.(Model).imgCursor)
+		assert.Nil(t, cmd)
+	})
+
+	t.Run("g is a no-op with no images", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		m.imgCursor = 0
+
+		got, cmd := m.updateImageKeys(newTestKeyMsg("g"))
+
+		assert.Equal(t, 0, got.(Model).imgCursor)
+		assert.Nil(t, cmd)
+	})
+
+	t.Run("G jumps to the last image when images exist", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		m.images = []Image{{ID: "a"}, {ID: "b"}, {ID: "c"}}
+		m.imgCursor = 0
+
+		got, cmd := m.updateImageKeys(newTestKeyMsg("G"))
+
+		assert.Equal(t, 2, got.(Model).imgCursor)
+		assert.Nil(t, cmd)
+	})
+
+	t.Run("G is a no-op with no images", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		m.imgCursor = 0
+
+		got, cmd := m.updateImageKeys(newTestKeyMsg("G"))
+
+		assert.Equal(t, 0, got.(Model).imgCursor)
+		assert.Nil(t, cmd)
+	})
+
+	t.Run("d", func(t *testing.T) {
+		t.Parallel()
+
+		t.Run("arms confirm for an unused image", func(t *testing.T) {
+			t.Parallel()
+
+			m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+			m.images = []Image{{ID: "img1", RepoTag: "nginx:latest"}}
+			m.imgCursor = 0
+
+			got, cmd := m.updateImageKeys(newTestKeyMsg("d"))
+
+			gotModel := got.(Model)
+			assert.Equal(t, &pendingDelete{kind: deleteImage, id: "img1", label: "nginx:latest"}, gotModel.confirm)
+			assert.Nil(t, cmd)
+		})
+
+		t.Run("does nothing for an image in use", func(t *testing.T) {
+			t.Parallel()
+
+			m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+			m.images = []Image{{ID: "img1", RepoTag: "nginx:latest"}}
+			m.containers = []Container{{ID: "c1", ImageID: "img1"}}
+			m.imgCursor = 0
+
+			got, cmd := m.updateImageKeys(newTestKeyMsg("d"))
+
+			assert.Nil(t, got.(Model).confirm)
+			assert.Nil(t, cmd)
+		})
+
+		t.Run("does nothing when a confirm is already pending", func(t *testing.T) {
+			t.Parallel()
+
+			m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+			m.images = []Image{{ID: "img1", RepoTag: "nginx:latest"}}
+			m.imgCursor = 0
+			m.confirm = &pendingDelete{kind: deleteImage, id: "other", label: "other"}
+
+			got, cmd := m.updateImageKeys(newTestKeyMsg("d"))
+
+			assert.Equal(t, "other", got.(Model).confirm.id)
+			assert.Nil(t, cmd)
+		})
+
+		t.Run("does nothing with an out-of-range cursor", func(t *testing.T) {
+			t.Parallel()
+
+			m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+			m.imgCursor = -1
+
+			got, cmd := m.updateImageKeys(newTestKeyMsg("d"))
+
+			assert.Nil(t, got.(Model).confirm)
+			assert.Nil(t, cmd)
+		})
+	})
+
+	t.Run("y", func(t *testing.T) {
+		t.Parallel()
+
+		t.Run("is a no-op without a pending confirm", func(t *testing.T) {
+			t.Parallel()
+
+			m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+
+			got, cmd := m.updateImageKeys(newTestKeyMsg("y"))
+
+			assert.Nil(t, got.(Model).confirm)
+			assert.Nil(t, cmd)
+		})
+
+		t.Run("removes the image and clears confirm on success", func(t *testing.T) {
+			t.Parallel()
+
+			var gotID string
+			resources := newTestResourceClient(nil)
+			resources.imageRemove = func(ctx context.Context, imageID string, options client.ImageRemoveOptions) (client.ImageRemoveResult, error) {
+				gotID = imageID
+				return client.ImageRemoveResult{}, nil
+			}
+			m := newTestModel(newTestLogRetargeter(), resources)
+			m.confirm = &pendingDelete{kind: deleteImage, id: "img1", label: "nginx:latest"}
+
+			got, cmd := m.updateImageKeys(newTestKeyMsg("y"))
+
+			assert.Nil(t, got.(Model).confirm)
+			require.NotNil(t, cmd)
+			assert.Nil(t, cmd())
+			assert.Equal(t, "img1", gotID)
+		})
+
+		t.Run("returns a watcherErrMsg when removal fails", func(t *testing.T) {
+			t.Parallel()
+
+			wantErr := errors.New("boom")
+			resources := newTestResourceClient(nil)
+			resources.imageRemove = func(ctx context.Context, imageID string, options client.ImageRemoveOptions) (client.ImageRemoveResult, error) {
+				return client.ImageRemoveResult{}, wantErr
+			}
+			m := newTestModel(newTestLogRetargeter(), resources)
+			m.confirm = &pendingDelete{kind: deleteImage, id: "img1", label: "nginx:latest"}
+
+			_, cmd := m.updateImageKeys(newTestKeyMsg("y"))
+
+			require.NotNil(t, cmd)
+			assert.Equal(t, watcherErrMsg{err: wantErr}, cmd())
+		})
+	})
+
+	t.Run("an unrecognized key is a no-op", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		m.images = []Image{{ID: "a"}}
+		m.imgCursor = 0
+
+		got, cmd := m.updateImageKeys(newTestKeyMsg("x"))
+
+		assert.Equal(t, 0, got.(Model).imgCursor)
+		assert.Nil(t, cmd)
+	})
+
+	t.Run("n and esc clear a pending confirm", func(t *testing.T) {
+		t.Parallel()
+
+		for _, key := range []string{"n", "esc"} {
+			t.Run(key, func(t *testing.T) {
+				t.Parallel()
+
+				m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+				m.confirm = &pendingDelete{kind: deleteImage, id: "img1", label: "nginx:latest"}
+
+				got, cmd := m.updateImageKeys(newTestKeyMsg(key))
+
+				assert.Nil(t, got.(Model).confirm)
+				assert.Nil(t, cmd)
+			})
+		}
+	})
+}
+
 func TestResourceFooter(t *testing.T) {
 	t.Parallel()
 
@@ -1084,19 +1465,25 @@ func TestRenderTabBar(t *testing.T) {
 			name:       "containers tab active",
 			tab:        tabContainers,
 			wantActive: styleSelected.Render(" 1:containers "),
-			wantDim:    []string{styleDim.Render("2:volumes"), styleDim.Render("3:networks")},
+			wantDim:    []string{styleDim.Render("2:volumes"), styleDim.Render("3:networks"), styleDim.Render("4:images")},
 		},
 		{
 			name:       "volumes tab active",
 			tab:        tabVolumes,
 			wantActive: styleSelected.Render(" 2:volumes "),
-			wantDim:    []string{styleDim.Render("1:containers"), styleDim.Render("3:networks")},
+			wantDim:    []string{styleDim.Render("1:containers"), styleDim.Render("3:networks"), styleDim.Render("4:images")},
 		},
 		{
 			name:       "networks tab active",
 			tab:        tabNetworks,
 			wantActive: styleSelected.Render(" 3:networks "),
-			wantDim:    []string{styleDim.Render("1:containers"), styleDim.Render("2:volumes")},
+			wantDim:    []string{styleDim.Render("1:containers"), styleDim.Render("2:volumes"), styleDim.Render("4:images")},
+		},
+		{
+			name:       "images tab active",
+			tab:        tabImages,
+			wantActive: styleSelected.Render(" 4:images "),
+			wantDim:    []string{styleDim.Render("1:containers"), styleDim.Render("2:volumes"), styleDim.Render("3:networks")},
 		},
 	}
 
@@ -1218,6 +1605,55 @@ func TestRenderNetworkList(t *testing.T) {
 	})
 }
 
+func TestRenderImageList(t *testing.T) {
+	t.Parallel()
+
+	t.Run("renders a row per image", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+		m = got.(Model)
+		m.images = []Image{{ID: "img1", RepoTag: "nginx", Size: 1_000_000}}
+
+		gotList := m.renderImageList()
+
+		require.Contains(t, gotList, formatImageRow(m.images[0], 0))
+	})
+
+	t.Run("renders the empty label with no images", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+		m = got.(Model)
+
+		gotList := m.renderImageList()
+
+		require.Contains(t, gotList, "no images")
+	})
+}
+
+func TestRenderImageDetail(t *testing.T) {
+	t.Parallel()
+
+	t.Run("contains id, repo:tag and used by", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		m.images = []Image{{ID: "img1", RepoTag: "nginx:latest", Size: 125_300_000}}
+		m.containers = []Container{{ID: "c1", Name: "web", ImageID: "img1"}}
+		m.imgCursor = 0
+
+		gotDetail := m.renderImageDetail()
+
+		assert.Contains(t, gotDetail, "id: img1")
+		assert.Contains(t, gotDetail, "repo:tag: nginx:latest")
+		assert.Contains(t, gotDetail, "used by:")
+		assert.Contains(t, gotDetail, "web")
+	})
+}
+
 func TestViewLayout(t *testing.T) {
 	t.Parallel()
 
@@ -1257,6 +1693,7 @@ func TestViewLayout(t *testing.T) {
 			{name: "containers", tab: tabContainers, want: "no containers 🦆"},
 			{name: "volumes", tab: tabVolumes, want: "no volumes 🦆"},
 			{name: "networks", tab: tabNetworks, want: "no networks 🦆"},
+			{name: "images", tab: tabImages, want: "no images 🦆"},
 		}
 		for _, tc := range tests {
 			t.Run(tc.name, func(t *testing.T) {
@@ -1287,6 +1724,7 @@ func TestViewLayout(t *testing.T) {
 			{name: "containers", tab: tabContainers, wantLeft: " containers", wantRight: " logs"},
 			{name: "volumes", tab: tabVolumes, wantLeft: " volumes", wantRight: " detail"},
 			{name: "networks", tab: tabNetworks, wantLeft: " networks", wantRight: " detail"},
+			{name: "images", tab: tabImages, wantLeft: " images", wantRight: " detail"},
 		}
 		for _, tc := range tests {
 			t.Run(tc.name, func(t *testing.T) {
@@ -1382,6 +1820,38 @@ func TestViewResourceFooter(t *testing.T) {
 		m.networks = []Network{{ID: "n1", Name: "app-net", Driver: "bridge"}}
 		m.netCursor = 0
 		m.confirm = &pendingDelete{kind: deleteNetwork, id: "n1", label: "app-net"}
+
+		gotView := m.View()
+
+		require.Contains(t, gotView, "? y/n")
+	})
+
+	t.Run("images tab shows the in-use hint", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+		m = got.(Model)
+		m.tab = tabImages
+		m.images = []Image{{ID: "img1", RepoTag: "nginx:latest"}}
+		m.containers = []Container{{ID: "c1", ImageID: "img1"}}
+		m.imgCursor = 0
+
+		gotView := m.View()
+
+		require.Contains(t, gotView, "d: image in use")
+	})
+
+	t.Run("images tab shows the confirm prompt", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+		m = got.(Model)
+		m.tab = tabImages
+		m.images = []Image{{ID: "img1", RepoTag: "nginx:latest"}}
+		m.imgCursor = 0
+		m.confirm = &pendingDelete{kind: deleteImage, id: "img1", label: "nginx:latest"}
 
 		gotView := m.View()
 
@@ -1977,6 +2447,10 @@ func (c *testResourceClientWithInspectErr) VolumeRemove(ctx context.Context, vol
 
 func (c *testResourceClientWithInspectErr) NetworkRemove(ctx context.Context, networkID string, options client.NetworkRemoveOptions) (client.NetworkRemoveResult, error) {
 	return client.NetworkRemoveResult{}, nil
+}
+
+func (c *testResourceClientWithInspectErr) ImageRemove(ctx context.Context, imageID string, options client.ImageRemoveOptions) (client.ImageRemoveResult, error) {
+	return client.ImageRemoveResult{}, nil
 }
 
 func (c *testResourceClientWithInspectErr) ContainerStart(ctx context.Context, containerID string, options client.ContainerStartOptions) (client.ContainerStartResult, error) {

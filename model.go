@@ -69,6 +69,7 @@ const (
 	tabContainers tabID = iota
 	tabVolumes
 	tabNetworks
+	tabImages
 )
 
 type deleteKind int
@@ -78,6 +79,7 @@ const (
 	deleteNetwork
 	deleteContainer
 	deleteStack
+	deleteImage
 )
 
 type pendingDelete struct {
@@ -125,6 +127,7 @@ type resourceClient interface {
 	ContainerRemove(ctx context.Context, containerID string, options client.ContainerRemoveOptions) (client.ContainerRemoveResult, error)
 	ContainerInspect(ctx context.Context, containerID string, options client.ContainerInspectOptions) (client.ContainerInspectResult, error)
 	ImageInspect(ctx context.Context, imageID string, inspectOpts ...client.ImageInspectOption) (client.ImageInspectResult, error)
+	ImageRemove(ctx context.Context, imageID string, options client.ImageRemoveOptions) (client.ImageRemoveResult, error)
 }
 
 type Model struct {
@@ -144,6 +147,9 @@ type Model struct {
 
 	networks  []Network
 	netCursor int
+
+	images    []Image
+	imgCursor int
 
 	confirm *pendingDelete
 
@@ -212,6 +218,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.netCursor < 0 {
 			m.netCursor = 0
+		}
+		return m, nil
+
+	case imagesMsg:
+		m.images = msg.images
+		if m.imgCursor >= len(m.images) {
+			m.imgCursor = len(m.images) - 1
+		}
+		if m.imgCursor < 0 {
+			m.imgCursor = 0
 		}
 		return m, nil
 
@@ -304,15 +320,19 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.tab = tabNetworks
 			m.confirm = nil
 			return m, nil
+		case "4":
+			m.tab = tabImages
+			m.confirm = nil
+			return m, nil
 		case "right":
-			m.tab = (m.tab + 1) % 3
+			m.tab = (m.tab + 1) % 4
 			m.confirm = nil
 			if m.tab == tabContainers {
 				return m, m.retarget()
 			}
 			return m, nil
 		case "left":
-			m.tab = (m.tab + 2) % 3
+			m.tab = (m.tab + 3) % 4
 			m.confirm = nil
 			if m.tab == tabContainers {
 				return m, m.retarget()
@@ -327,6 +347,10 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	if m.tab == tabNetworks {
 		return m.updateNetworkKeys(msg)
+	}
+
+	if m.tab == tabImages {
+		return m.updateImageKeys(msg)
 	}
 
 	if m.focus == focusLogs {
@@ -506,6 +530,29 @@ func (m Model) updateNetworkKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m Model) updateImageKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "j", "down", "k", "up", "g", "G":
+		m.imgCursor = moveListCursor(m.imgCursor, len(m.images), msg.String())
+		return m, nil
+	case "d":
+		if m.confirm != nil || m.imgCursor < 0 || m.imgCursor >= len(m.images) {
+			return m, nil
+		}
+		img := m.images[m.imgCursor]
+		if imageUsedBy(m.images, m.containers)[img.ID] == 0 {
+			m.confirm = &pendingDelete{kind: deleteImage, id: img.ID, label: img.RepoTag}
+		}
+		return m, nil
+	case "y":
+		return m.applyConfirm()
+	case "n", "esc":
+		m.confirm = nil
+		return m, nil
+	}
+	return m, nil
+}
+
 func moveListCursor(cursor, length int, key string) int {
 	switch key {
 	case "j", "down":
@@ -546,6 +593,8 @@ func (m Model) applyConfirm() (Model, tea.Cmd) {
 			_, err = resources.NetworkRemove(context.Background(), id, client.NetworkRemoveOptions{})
 		case deleteContainer:
 			_, err = resources.ContainerRemove(context.Background(), id, client.ContainerRemoveOptions{})
+		case deleteImage:
+			_, err = resources.ImageRemove(context.Background(), id, client.ImageRemoveOptions{})
 		case deleteStack:
 			for _, sid := range ids {
 				if _, rmErr := resources.ContainerRemove(context.Background(), sid, client.ContainerRemoveOptions{}); rmErr != nil {
@@ -743,6 +792,9 @@ func (m Model) View() string {
 	} else if m.tab == tabNetworks {
 		list = m.renderNetworkList()
 		rightContent = m.renderNetworkDetail()
+	} else if m.tab == tabImages {
+		list = m.renderImageList()
+		rightContent = m.renderImageDetail()
 	} else if m.detail != "" {
 		rightContent = m.detailVP.View()
 	} else if m.compose != "" {
@@ -772,6 +824,9 @@ func (m Model) View() string {
 	} else if m.tab == tabNetworks {
 		leftTitle = " networks"
 		title = " detail"
+	} else if m.tab == tabImages {
+		leftTitle = " images"
+		title = " detail"
 	}
 	titles := lipgloss.JoinHorizontal(lipgloss.Top,
 		lipgloss.NewStyle().Width(m.listWidth()+2).Render(styleTitle.Render(leftTitle)),
@@ -799,6 +854,14 @@ func (m Model) View() string {
 			}
 		}
 		footer = resourceFooter(m.confirm, hint)
+	} else if m.tab == tabImages {
+		hint := ""
+		if m.imgCursor >= 0 && m.imgCursor < len(m.images) {
+			if imageUsedBy(m.images, m.containers)[m.images[m.imgCursor].ID] > 0 {
+				hint = "d: image in use"
+			}
+		}
+		footer = resourceFooter(m.confirm, hint)
 	} else if m.tab == tabContainers && m.detail != "" {
 		footer = " j/k scroll  g/G top/bottom  esc back  q quit"
 	} else if m.tab == tabContainers && m.compose != "" {
@@ -814,7 +877,7 @@ func (m Model) View() string {
 }
 
 func renderTabBar(tab tabID) string {
-	labels := []string{"1:containers", "2:volumes", "3:networks"}
+	labels := []string{"1:containers", "2:volumes", "3:networks", "4:images"}
 	parts := make([]string, len(labels))
 	for i, label := range labels {
 		if tabID(i) == tab {
@@ -1088,6 +1151,46 @@ func (m Model) renderNetworkDetail() string {
 				users = append(users, c.Name)
 				break
 			}
+		}
+	}
+	if len(users) > 0 {
+		b.WriteString("used by:\n")
+		for _, name := range users {
+			b.WriteString("  " + name + "\n")
+		}
+	}
+
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func (m Model) renderImageList() string {
+	used := imageUsedBy(m.images, m.containers)
+	rows := make([]string, 0, len(m.images))
+	for _, i := range m.images {
+		rows = append(rows, formatImageRow(i, used[i.ID]))
+	}
+	return m.renderResourceRows(rows, m.imgCursor, "no images 🦆")
+}
+
+func formatImageRow(i Image, used int) string {
+	return fmt.Sprintf("%s  %s  used-by:%d", i.RepoTag, formatImageSize(i.Size), used)
+}
+
+func (m Model) renderImageDetail() string {
+	if m.imgCursor < 0 || m.imgCursor >= len(m.images) {
+		return styleDim.Render("no images 🦆")
+	}
+	img := m.images[m.imgCursor]
+
+	var b strings.Builder
+	b.WriteString("id: " + img.ID + "\n")
+	b.WriteString("repo:tag: " + img.RepoTag + "\n")
+	b.WriteString("size: " + formatImageSize(img.Size) + "\n")
+
+	var users []string
+	for _, c := range m.containers {
+		if c.ImageID == img.ID {
+			users = append(users, c.Name)
 		}
 	}
 	if len(users) > 0 {
