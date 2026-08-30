@@ -15,34 +15,31 @@ Type "j"
 Sleep 2s
 
 Type "j"
-Sleep 3s
-
-Type "j"
 Sleep 2s
 
-Type "j"
-Sleep 2s
+Enter
+Sleep 4s
 
-Type "j"
-Sleep 2s
-
-Type "G"
-Sleep 2s
-
-Type "g"
-Sleep 2s
+Escape
+Sleep 1s
 
 Type "y"
 Sleep 4s
 
-Type "G"
-Sleep 2s
-
-Type "g"
+Escape
 Sleep 1s
 
+Type "/"
+Sleep 1s
+
+Type "api"
+Sleep 3s
+
+Enter
+Sleep 2s
+
 Escape
-Sleep 2s
+Sleep 1s
 
 Right
 Sleep 2s
@@ -53,10 +50,10 @@ Sleep 2s
 Right
 Sleep 2s
 
-Type "j"
-Sleep 2s
-
 Right
+Sleep 3s
+
+Type "j"
 Sleep 2s
 
 Type "q"
