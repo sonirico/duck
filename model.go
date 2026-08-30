@@ -674,8 +674,16 @@ func (m Model) View() string {
 	if m.tab == tabContainers && m.compose != "" {
 		title = " compose"
 	}
+	leftTitle := " containers"
+	if m.tab == tabVolumes {
+		leftTitle = " volumes"
+		title = " detail"
+	} else if m.tab == tabNetworks {
+		leftTitle = " networks"
+		title = " detail"
+	}
 	titles := lipgloss.JoinHorizontal(lipgloss.Top,
-		lipgloss.NewStyle().Width(m.listWidth()+2).Render(styleTitle.Render(" containers")),
+		lipgloss.NewStyle().Width(m.listWidth()+2).Render(styleTitle.Render(leftTitle)),
 		styleTitle.Render(truncate(title, m.logsWidth())),
 	)
 
@@ -933,7 +941,7 @@ func (m Model) logsWidth() int {
 }
 
 func (m Model) panesHeight() int {
-	h := m.height - 4
+	h := m.height - 5
 	if h < 3 {
 		h = 3
 	}
