@@ -366,6 +366,22 @@ func TestUpdateKeys(t *testing.T) {
 
 		assert.Nil(t, got.(Model).confirm)
 	})
+
+	t.Run("left wraps from volumes back to containers", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		m.focus = focusList
+		m.tab = tabVolumes
+		m.rows = []row{{kind: rowContainer, key: "id:c1"}}
+
+		got, cmd := m.updateKeys(newTestKeyMsg("left"))
+
+		gotModel := got.(Model)
+		assert.Equal(t, tabContainers, gotModel.tab)
+		assert.Nil(t, gotModel.confirm)
+		require.NotNil(t, cmd)
+	})
 }
 
 func TestUpdateVolumeKeys(t *testing.T) {
@@ -886,6 +902,19 @@ func TestViewResourceFooter(t *testing.T) {
 		gotView := m.View()
 
 		require.Contains(t, gotView, "? y/n")
+	})
+
+	t.Run("containers tab shows the default footer", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+		m = got.(Model)
+		m.tab = tabContainers
+
+		gotView := m.View()
+
+		require.Contains(t, gotView, "j/k move  g/G top/bottom  tab focus  e exec  left/right tab  q quit")
 	})
 }
 
