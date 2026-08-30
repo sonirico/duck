@@ -704,6 +704,23 @@ func TestContainerOpKeys(t *testing.T) {
 		}
 	})
 
+	t.Run("y with a pending stack confirm returns a watcherErrMsg when a ContainerRemove fails", func(t *testing.T) {
+		t.Parallel()
+
+		wantErr := errors.New("boom")
+		resources := newTestResourceClientWithContainerOpErr(wantErr)
+		m := newTestModel(newTestLogRetargeter(), resources)
+		m.tab = tabContainers
+		m.focus = focusList
+		m.confirm = &pendingDelete{kind: deleteStack, ids: []string{"c1", "c2"}, label: "app"}
+
+		got, cmd := m.updateKeys(newTestKeyMsg("y"))
+
+		assert.Nil(t, got.(Model).confirm)
+		require.NotNil(t, cmd)
+		assert.Equal(t, watcherErrMsg{err: wantErr}, cmd())
+	})
+
 	t.Run("y with a pending confirm calls ContainerRemove with the id", func(t *testing.T) {
 		t.Parallel()
 
