@@ -79,6 +79,10 @@ const (
 	deleteNetwork
 	deleteContainer
 	deleteStack
+	pruneContainers
+	pruneImages
+	pruneVolumes
+	pruneNetworks
 	deleteImage
 )
 
@@ -128,6 +132,10 @@ type resourceClient interface {
 	ContainerInspect(ctx context.Context, containerID string, options client.ContainerInspectOptions) (client.ContainerInspectResult, error)
 	ImageInspect(ctx context.Context, imageID string, inspectOpts ...client.ImageInspectOption) (client.ImageInspectResult, error)
 	ImageRemove(ctx context.Context, imageID string, options client.ImageRemoveOptions) (client.ImageRemoveResult, error)
+	ContainerPrune(ctx context.Context, opts client.ContainerPruneOptions) (client.ContainerPruneResult, error)
+	ImagePrune(ctx context.Context, opts client.ImagePruneOptions) (client.ImagePruneResult, error)
+	VolumePrune(ctx context.Context, options client.VolumePruneOptions) (client.VolumePruneResult, error)
+	NetworkPrune(ctx context.Context, opts client.NetworkPruneOptions) (client.NetworkPruneResult, error)
 }
 
 type Model struct {
@@ -471,6 +479,10 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.confirm = &pendingDelete{kind: deleteStack, ids: m.stackContainerIDs(r.project), label: name}
 			}
 		}
+	case "P":
+		if m.confirm == nil {
+			m.confirm = &pendingDelete{kind: pruneContainers, label: "stopped containers"}
+		}
 	case "y":
 		if m.confirm != nil {
 			return m.applyConfirm()
@@ -498,6 +510,11 @@ func (m Model) updateVolumeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.confirm = &pendingDelete{kind: deleteVolume, id: v.Name, label: v.Name}
 		}
 		return m, nil
+	case "P":
+		if m.confirm == nil {
+			m.confirm = &pendingDelete{kind: pruneVolumes, label: "unused volumes"}
+		}
+		return m, nil
 	case "y":
 		return m.applyConfirm()
 	case "n", "esc":
@@ -521,6 +538,11 @@ func (m Model) updateNetworkKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.confirm = &pendingDelete{kind: deleteNetwork, id: n.ID, label: n.Name}
 		}
 		return m, nil
+	case "P":
+		if m.confirm == nil {
+			m.confirm = &pendingDelete{kind: pruneNetworks, label: "unused networks"}
+		}
+		return m, nil
 	case "y":
 		return m.applyConfirm()
 	case "n", "esc":
@@ -542,6 +564,11 @@ func (m Model) updateImageKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		img := m.images[m.imgCursor]
 		if imageUsedBy(m.images, m.containers)[img.ID] == 0 {
 			m.confirm = &pendingDelete{kind: deleteImage, id: img.ID, label: img.RepoTag}
+		}
+		return m, nil
+	case "P":
+		if m.confirm == nil {
+			m.confirm = &pendingDelete{kind: pruneImages, label: "dangling images"}
 		}
 		return m, nil
 	case "y":
@@ -601,6 +628,14 @@ func (m Model) applyConfirm() (Model, tea.Cmd) {
 					err = rmErr
 				}
 			}
+		case pruneContainers:
+			_, err = resources.ContainerPrune(context.Background(), client.ContainerPruneOptions{})
+		case pruneImages:
+			_, err = resources.ImagePrune(context.Background(), client.ImagePruneOptions{})
+		case pruneVolumes:
+			_, err = resources.VolumePrune(context.Background(), client.VolumePruneOptions{})
+		case pruneNetworks:
+			_, err = resources.NetworkPrune(context.Background(), client.NetworkPruneOptions{})
 		}
 		if err != nil {
 			return watcherErrMsg{err: err}
@@ -869,7 +904,7 @@ func (m Model) View() string {
 	} else if m.confirm != nil {
 		footer = resourceFooter(m.confirm, "")
 	} else {
-		footer = " j/k move  tab focus  enter detail  y compose  e exec  s/S stop/start  r restart  p pause  K kill  d delete  left/right tab  q quit"
+		footer = " j/k move  tab focus  enter detail  y compose  e exec  s/S stop/start  r restart  p pause  K kill  d delete  P prune  left/right tab  q quit"
 	}
 
 	return header + "\n" + titles + "\n" +
@@ -1025,7 +1060,7 @@ func (m Model) renderStackDetail(project string) string {
 }
 
 func resourceFooter(confirm *pendingDelete, hint string) string {
-	footer := " j/k move  left/right tab  d delete  q quit"
+	footer := " j/k move  left/right tab  d delete  P prune  q quit"
 	if confirm != nil {
 		footer += "  delete " + confirm.label + "? y/n"
 	} else if hint != "" {

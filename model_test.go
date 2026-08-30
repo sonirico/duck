@@ -117,6 +117,26 @@ func (c *testResourceClient) ImageInspect(ctx context.Context, imageID string, i
 	return c.imageInspect, nil
 }
 
+func (c *testResourceClient) ContainerPrune(ctx context.Context, opts client.ContainerPruneOptions) (client.ContainerPruneResult, error) {
+	c.calls = append(c.calls, testResourceCall{method: "prune-containers"})
+	return client.ContainerPruneResult{}, c.containerOpErr
+}
+
+func (c *testResourceClient) ImagePrune(ctx context.Context, opts client.ImagePruneOptions) (client.ImagePruneResult, error) {
+	c.calls = append(c.calls, testResourceCall{method: "prune-images"})
+	return client.ImagePruneResult{}, c.containerOpErr
+}
+
+func (c *testResourceClient) VolumePrune(ctx context.Context, options client.VolumePruneOptions) (client.VolumePruneResult, error) {
+	c.calls = append(c.calls, testResourceCall{method: "prune-volumes"})
+	return client.VolumePruneResult{}, c.containerOpErr
+}
+
+func (c *testResourceClient) NetworkPrune(ctx context.Context, opts client.NetworkPruneOptions) (client.NetworkPruneResult, error) {
+	c.calls = append(c.calls, testResourceCall{method: "prune-networks"})
+	return client.NetworkPruneResult{}, c.containerOpErr
+}
+
 func newTestModel(streamer logRetargeter, resources resourceClient) Model {
 	return NewModel(streamer, TmuxInfo{}, resources)
 }
@@ -1410,10 +1430,111 @@ func TestUpdateImageKeys(t *testing.T) {
 	})
 }
 
+func TestPruneKeys(t *testing.T) {
+	t.Parallel()
+
+	callKeys := func(m Model, tab tabID, msg tea.KeyMsg) (Model, tea.Cmd) {
+		switch tab {
+		case tabVolumes:
+			got, cmd := m.updateVolumeKeys(msg)
+			return got.(Model), cmd
+		case tabNetworks:
+			got, cmd := m.updateNetworkKeys(msg)
+			return got.(Model), cmd
+		case tabImages:
+			got, cmd := m.updateImageKeys(msg)
+			return got.(Model), cmd
+		default:
+			got, cmd := m.updateKeys(msg)
+			return got.(Model), cmd
+		}
+	}
+
+	tests := []struct {
+		name      string
+		tab       tabID
+		kind      deleteKind
+		label     string
+		pruneCall string
+	}{
+		{name: "containers", tab: tabContainers, kind: pruneContainers, label: "stopped containers", pruneCall: "prune-containers"},
+		{name: "volumes", tab: tabVolumes, kind: pruneVolumes, label: "unused volumes", pruneCall: "prune-volumes"},
+		{name: "networks", tab: tabNetworks, kind: pruneNetworks, label: "unused networks", pruneCall: "prune-networks"},
+		{name: "images", tab: tabImages, kind: pruneImages, label: "dangling images", pruneCall: "prune-images"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			t.Run("P arms the confirm with the prune kind and label", func(t *testing.T) {
+				t.Parallel()
+
+				m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+				m.tab = tc.tab
+				m.focus = focusList
+
+				got, cmd := callKeys(m, tc.tab, newTestKeyMsg("P"))
+
+				assert.Equal(t, &pendingDelete{kind: tc.kind, label: tc.label}, got.confirm)
+				assert.Nil(t, cmd)
+			})
+
+			t.Run("y invokes the prune method exactly once", func(t *testing.T) {
+				t.Parallel()
+
+				resources := newTestResourceClient(nil)
+				m := newTestModel(newTestLogRetargeter(), resources)
+				m.tab = tc.tab
+				m.focus = focusList
+				m.confirm = &pendingDelete{kind: tc.kind, label: tc.label}
+
+				got, cmd := callKeys(m, tc.tab, newTestKeyMsg("y"))
+
+				assert.Nil(t, got.confirm)
+				require.NotNil(t, cmd)
+				assert.Nil(t, cmd())
+				require.Len(t, resources.calls, 1)
+				assert.Equal(t, testResourceCall{method: tc.pruneCall}, resources.calls[0])
+			})
+
+			t.Run("n clears the confirm without calling the prune method", func(t *testing.T) {
+				t.Parallel()
+
+				resources := newTestResourceClient(nil)
+				m := newTestModel(newTestLogRetargeter(), resources)
+				m.tab = tc.tab
+				m.focus = focusList
+				m.confirm = &pendingDelete{kind: tc.kind, label: tc.label}
+
+				got, cmd := callKeys(m, tc.tab, newTestKeyMsg("n"))
+
+				assert.Nil(t, got.confirm)
+				assert.Nil(t, cmd)
+				assert.Empty(t, resources.calls)
+			})
+
+			t.Run("P with a confirm already armed does not overwrite it", func(t *testing.T) {
+				t.Parallel()
+
+				m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+				m.tab = tc.tab
+				m.focus = focusList
+				m.confirm = &pendingDelete{kind: deleteVolume, id: "other", label: "other"}
+
+				got, cmd := callKeys(m, tc.tab, newTestKeyMsg("P"))
+
+				assert.Equal(t, &pendingDelete{kind: deleteVolume, id: "other", label: "other"}, got.confirm)
+				assert.Nil(t, cmd)
+			})
+		})
+	}
+}
+
 func TestResourceFooter(t *testing.T) {
 	t.Parallel()
 
-	const base = " j/k move  left/right tab  d delete  q quit"
+	const base = " j/k move  left/right tab  d delete  P prune  q quit"
 
 	tests := []struct {
 		name    string
@@ -1868,7 +1989,7 @@ func TestViewResourceFooter(t *testing.T) {
 
 		gotView := m.View()
 
-		require.Contains(t, gotView, "j/k move  tab focus  enter detail  y compose  e exec  s/S stop/start  r restart  p pause  K kill  d delete  left/right tab  q quit")
+		require.Contains(t, gotView, "j/k move  tab focus  enter detail  y compose  e exec  s/S stop/start  r restart  p pause  K kill  d delete  P prune  left/right tab  q quit")
 	})
 
 	t.Run("containers tab shows the confirm prompt", func(t *testing.T) {
@@ -2503,4 +2624,20 @@ func (c *testResourceClientWithInspectErr) ImageInspect(ctx context.Context, ima
 		return client.ImageInspectResult{}, c.imageInspectErr
 	}
 	return client.ImageInspectResult{}, nil
+}
+
+func (c *testResourceClientWithInspectErr) ContainerPrune(ctx context.Context, opts client.ContainerPruneOptions) (client.ContainerPruneResult, error) {
+	return client.ContainerPruneResult{}, nil
+}
+
+func (c *testResourceClientWithInspectErr) ImagePrune(ctx context.Context, opts client.ImagePruneOptions) (client.ImagePruneResult, error) {
+	return client.ImagePruneResult{}, nil
+}
+
+func (c *testResourceClientWithInspectErr) VolumePrune(ctx context.Context, options client.VolumePruneOptions) (client.VolumePruneResult, error) {
+	return client.VolumePruneResult{}, nil
+}
+
+func (c *testResourceClientWithInspectErr) NetworkPrune(ctx context.Context, opts client.NetworkPruneOptions) (client.NetworkPruneResult, error) {
+	return client.NetworkPruneResult{}, nil
 }
