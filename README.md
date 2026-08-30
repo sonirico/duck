@@ -19,6 +19,7 @@ A terminal UI for Docker: live container tree, aggregated stack logs, and intera
 - **Networks tab**: press 3 to list networks with driver, subnet and usage; unused non-builtin networks can be deleted with a y/n confirmation.
 - **Container lifecycle operations**: stop, start, restart, pause/unpause, kill and remove (with a y/n confirmation) the selected container directly from the list.
 - **Compose view**: press `y` to view the docker-compose file reconstructed from the Docker API, without reading the filesystem.
+- **Detail view**: press `enter` on a stack or container to see its services, ports, volumes and networks, without extra calls to the daemon.
 
 ## Aggregated logs
 
@@ -67,6 +68,8 @@ just build
 | `d`       | container list | remove the selected container (asks y/n) |
 | `y`       | container list | view the reconstructed docker-compose |
 | `esc`     | compose view | close the compose view                |
+| `enter`   | container list | open the detail view for the selected stack/container |
+| `esc`     | detail view | close the detail view                |
 | `q`       | anywhere    | quit                      |
 | `j` / `k` | logs panel  | scroll                    |
 | `g`       | logs panel  | jump to top, stop following |
