@@ -137,7 +137,7 @@ func TestWatcherSnapshot(t *testing.T) {
 		err := f.w.snapshot(context.Background())
 
 		require.NoError(t, err)
-		assert.Equal(t, []Container{{ID: "c1", Name: "web", Volumes: []string{}}}, f.store.List())
+		assert.Equal(t, []Container{{ID: "c1", Name: "web", Ports: []string{}, Volumes: []string{}}}, f.store.List())
 		assert.Equal(t, []Volume{{Name: "data"}}, f.volumes.List())
 	})
 
@@ -240,7 +240,7 @@ func TestWatcherApply(t *testing.T) {
 
 		f.w.apply(context.Background(), msg)
 
-		assert.Equal(t, []Container{{ID: "c1", Name: "web", Volumes: []string{}}}, f.store.List())
+		assert.Equal(t, []Container{{ID: "c1", Name: "web", Ports: []string{}, Volumes: []string{}}}, f.store.List())
 		got := recvContainers(t, f.msgs)
 		assert.Equal(t, f.store.List(), got.containers)
 	})
@@ -393,7 +393,7 @@ func TestWatcherRunLoop(t *testing.T) {
 		}()
 
 		initial := recvContainers(t, f.msgs)
-		assert.Equal(t, []Container{{ID: "c1", Name: "web", Volumes: []string{}}}, initial.containers)
+		assert.Equal(t, []Container{{ID: "c1", Name: "web", Ports: []string{}, Volumes: []string{}}}, initial.containers)
 		recvVolumes(t, f.msgs)
 		recvNetworks(t, f.msgs)
 
