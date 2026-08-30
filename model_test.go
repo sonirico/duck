@@ -164,6 +164,26 @@ func newTestKeyMsg(s string) tea.KeyMsg {
 	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
 }
 
+func typeFilter(m Model, text string) Model {
+	got, _ := m.updateKeys(newTestKeyMsg("/"))
+	m = got.(Model)
+	for _, ch := range text {
+		got, _ := m.updateKeys(newTestKeyMsg(string(ch)))
+		m = got.(Model)
+	}
+	return m
+}
+
+func containerRowNames(rows []row) []string {
+	var names []string
+	for _, r := range rows {
+		if r.kind == rowContainer {
+			names = append(names, r.container.Name)
+		}
+	}
+	return names
+}
+
 func TestFormatVolumeRow(t *testing.T) {
 	t.Parallel()
 
@@ -2992,4 +3012,132 @@ func (c *testResourceClientWithInspectErr) VolumePrune(ctx context.Context, opti
 
 func (c *testResourceClientWithInspectErr) NetworkPrune(ctx context.Context, opts client.NetworkPruneOptions) (client.NetworkPruneResult, error) {
 	return client.NetworkPruneResult{}, nil
+}
+
+func TestFilter(t *testing.T) {
+	t.Parallel()
+
+	newTestContainers := func() []Container {
+		return []Container{
+			{ID: "c1", Name: "web", Service: "web", Project: "app", Image: "nginx:latest"},
+			{ID: "c2", Name: "db", Service: "database", Project: "app", Image: "postgres:15"},
+			{ID: "c3", Name: "cache", Service: "cache", Project: "app", Image: "redis:7"},
+		}
+	}
+
+	t.Run("typing after / narrows rows to matching containers", func(t *testing.T) {
+		t.Parallel()
+
+		tests := []struct {
+			name       string
+			filterText string
+			wantNames  []string
+		}{
+			{name: "match by name", filterText: "web", wantNames: []string{"web"}},
+			{name: "match by service", filterText: "data", wantNames: []string{"db"}},
+			{name: "match by image", filterText: "REDIS", wantNames: []string{"cache"}},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+				m.containers = newTestContainers()
+				m.rows = newRows(m.containers)
+
+				m = typeFilter(m, tc.filterText)
+
+				assert.True(t, m.filtering)
+				assert.Equal(t, tc.filterText, m.filter)
+				assert.Equal(t, tc.wantNames, containerRowNames(m.rows))
+			})
+		}
+	})
+
+	t.Run("backspace re-expands the filtered rows", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		m.containers = newTestContainers()
+		m.rows = newRows(m.containers)
+
+		m = typeFilter(m, "web")
+		require.Equal(t, []string{"web"}, containerRowNames(m.rows))
+
+		got, _ := m.updateKeys(newTestKeyMsg("backspace"))
+		got, _ = got.(Model).updateKeys(newTestKeyMsg("backspace"))
+		got, _ = got.(Model).updateKeys(newTestKeyMsg("backspace"))
+		m = got.(Model)
+
+		assert.Equal(t, "", m.filter)
+		assert.ElementsMatch(t, []string{"web", "db", "cache"}, containerRowNames(m.rows))
+	})
+
+	t.Run("esc while filtering clears the filter and restores all rows", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		m.containers = newTestContainers()
+		m.rows = newRows(m.containers)
+
+		m = typeFilter(m, "web")
+		got, _ := m.updateKeys(newTestKeyMsg("esc"))
+		m = got.(Model)
+
+		assert.False(t, m.filtering)
+		assert.Equal(t, "", m.filter)
+		assert.ElementsMatch(t, []string{"web", "db", "cache"}, containerRowNames(m.rows))
+	})
+
+	t.Run("enter applies the filter and a later esc clears it", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+		m = got.(Model)
+		m.containers = newTestContainers()
+		m.rows = newRows(m.containers)
+
+		m = typeFilter(m, "web")
+		got, _ = m.updateKeys(newTestKeyMsg("enter"))
+		m = got.(Model)
+
+		assert.False(t, m.filtering)
+		assert.Equal(t, "web", m.filter)
+		titlesRow := strings.Split(m.View(), "\n")[1]
+		assert.Contains(t, titlesRow, "/web")
+
+		got, _ = m.updateKeys(newTestKeyMsg("esc"))
+		m = got.(Model)
+
+		assert.Equal(t, "", m.filter)
+		assert.ElementsMatch(t, []string{"web", "db", "cache"}, containerRowNames(m.rows))
+	})
+
+	t.Run("footer shows the filter prompt while filtering", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+		m = got.(Model)
+		m.containers = newTestContainers()
+		m.rows = newRows(m.containers)
+
+		m = typeFilter(m, "w")
+
+		assert.Contains(t, m.View(), "filter: /w")
+	})
+
+	t.Run("containersMsg respects an active filter", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		m.filter = "web"
+
+		got, _ := m.Update(containersMsg{containers: newTestContainers()})
+		m = got.(Model)
+
+		assert.Equal(t, []string{"web"}, containerRowNames(m.rows))
+	})
 }

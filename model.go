@@ -164,6 +164,9 @@ type Model struct {
 	cursor     int
 	focus      focusArea
 
+	filtering bool
+	filter    string
+
 	volumes   []Volume
 	volCursor int
 
@@ -219,7 +222,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case containersMsg:
 		prevKey := m.selectedKey()
 		m.containers = msg.containers
-		m.rows = newRows(msg.containers)
+		m.rows = newRows(m.filteredContainers())
 		m.cursor = indexOfKey(m.rows, prevKey)
 		if prevKey == "" || m.selectedKey() != prevKey {
 			return m, m.retarget()
@@ -366,6 +369,42 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
+	if m.filtering {
+		var cmd tea.Cmd
+		switch msg.String() {
+		case "esc":
+			m.filter = ""
+			m.filtering = false
+			m.cursor = 0
+			m.rows = newRows(m.filteredContainers())
+			if m.tab == tabContainers {
+				cmd = m.retarget()
+			}
+		case "enter":
+			m.filtering = false
+		case "backspace":
+			if m.filter != "" {
+				r := []rune(m.filter)
+				m.filter = string(r[:len(r)-1])
+				m.cursor = 0
+				m.rows = newRows(m.filteredContainers())
+				if m.tab == tabContainers {
+					cmd = m.retarget()
+				}
+			}
+		default:
+			if len(msg.Runes) == 1 {
+				m.filter += string(msg.Runes)
+				m.cursor = 0
+				m.rows = newRows(m.filteredContainers())
+				if m.tab == tabContainers {
+					cmd = m.retarget()
+				}
+			}
+		}
+		return m, cmd
+	}
+
 	if m.focus == focusList {
 		switch msg.String() {
 		case "1":
@@ -399,6 +438,11 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+	}
+
+	if msg.String() == "/" && m.focus == focusList && m.confirm == nil {
+		m.filtering = true
+		return m, nil
 	}
 
 	if m.tab == tabVolumes {
@@ -559,6 +603,11 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "n", "esc":
 		if m.confirm != nil {
 			m.confirm = nil
+		} else if m.filter != "" {
+			m.filter = ""
+			m.cursor = 0
+			m.rows = newRows(m.filteredContainers())
+			return m, m.retarget()
 		}
 	}
 	return m, nil
@@ -889,6 +938,29 @@ func (m Model) selectedKey() string {
 	return m.rows[m.cursor].key
 }
 
+func matchesFilter(filter string, fields ...string) bool {
+	if filter == "" {
+		return true
+	}
+	needle := strings.ToLower(filter)
+	for _, f := range fields {
+		if strings.Contains(strings.ToLower(f), needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func (m Model) filteredContainers() []Container {
+	var out []Container
+	for _, c := range m.containers {
+		if matchesFilter(m.filter, c.Name, c.Service, c.Project, c.Image) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 func newRows(containers []Container) []row {
 	byProject := make(map[string][]Container)
 	for _, c := range containers {
@@ -973,6 +1045,9 @@ func (m Model) View() string {
 		leftTitle = " images"
 		title = " detail"
 	}
+	if !m.filtering && m.filter != "" {
+		leftTitle += " /" + m.filter
+	}
 	titles := lipgloss.JoinHorizontal(lipgloss.Top,
 		lipgloss.NewStyle().Width(m.listWidth()+2).Render(styleTitle.Render(leftTitle)),
 		styleTitle.Render(truncate(title, m.logsWidth())),
@@ -1015,6 +1090,9 @@ func (m Model) View() string {
 		footer = resourceFooter(m.confirm, "")
 	} else {
 		footer = " j/k move  tab focus  enter detail  y compose  e exec  s/S stop/start  r restart  p pause  K kill  d delete  P prune  left/right tab  q quit"
+	}
+	if m.filtering {
+		footer = " filter: /" + m.filter
 	}
 
 	return header + "\n" + titles + "\n" +
