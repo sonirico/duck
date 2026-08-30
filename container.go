@@ -13,6 +13,7 @@ type Container struct {
 	ID       string
 	Name     string
 	Image    string
+	ImageID  string
 	State    string
 	Status   string
 	Ports    []string
@@ -60,6 +61,7 @@ func newContainerFromSummary(s container.Summary) Container {
 		ID:       s.ID,
 		Name:     name,
 		Image:    s.Image,
+		ImageID:  s.ImageID,
 		State:    string(s.State),
 		Status:   s.Status,
 		Ports:    ports,
