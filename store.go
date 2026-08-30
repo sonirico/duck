@@ -6,14 +6,15 @@ import (
 )
 
 type Container struct {
-	ID      string
-	Name    string
-	Image   string
-	State   string
-	Status  string
-	Project string
-	Service string
-	Volumes []string
+	ID       string
+	Name     string
+	Image    string
+	State    string
+	Status   string
+	Project  string
+	Service  string
+	Volumes  []string
+	Networks []string
 }
 
 type Store[T any] struct {

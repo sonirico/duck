@@ -16,6 +16,7 @@ A terminal UI for Docker: live container tree, aggregated stack logs, and intera
 - **Interactive exec with native tmux integration**: press `e` on a container to open a shell. Inside tmux >= 3.2 it opens a popup, >= 3.0 a split pane, otherwise it falls back to an inline `docker exec`.
 - **Correct stdout/stderr demuxing**: logs are demultiplexed with `stdcopy`, so non-TTY containers render cleanly.
 - **Volumes tab**: press 2 to list volumes with drivers and usage; unused volumes can be deleted with a y/n confirmation.
+- **Networks tab**: press 3 to list networks with driver, subnet and usage; unused non-builtin networks can be deleted with a y/n confirmation.
 
 ## Aggregated logs
 
@@ -46,13 +47,13 @@ just build
 | `j` / `k` | container list | move selection          |
 | `g` / `G` | container list | jump to top / bottom     |
 | `tab`     | anywhere    | switch focus between list and logs |
-| `1` / `2` | anywhere    | switch tab containers/volumes |
+| `1` / `2` / `3` | anywhere | switch tab containers/volumes/networks |
 | `e`       | container list | open an interactive shell in the selected container |
 | `q`       | anywhere    | quit                      |
 | `j` / `k` | logs panel  | scroll                    |
 | `g`       | logs panel  | jump to top, stop following |
 | `G`       | logs panel  | jump to bottom, resume following |
-| `d`       | volumes tab | delete unused volume (asks y/n) |
+| `d`       | volumes/networks tab | delete unused volume/network (asks y/n) |
 
 ## Development
 
