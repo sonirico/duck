@@ -32,19 +32,31 @@ Sleep 2s
 Type "g"
 Sleep 2s
 
-Type "2"
+Type "y"
+Sleep 4s
+
+Type "G"
+Sleep 2s
+
+Type "g"
+Sleep 1s
+
+Escape
+Sleep 2s
+
+Right
 Sleep 2s
 
 Type "j"
 Sleep 2s
 
-Type "3"
+Right
 Sleep 2s
 
 Type "j"
 Sleep 2s
 
-Type "1"
+Right
 Sleep 2s
 
 Type "q"

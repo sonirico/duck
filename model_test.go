@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
 	"github.com/stretchr/testify/assert"
@@ -1069,6 +1070,53 @@ func TestRenderNetworkList(t *testing.T) {
 		gotList := m.renderNetworkList()
 
 		require.Contains(t, gotList, "no networks")
+	})
+}
+
+func TestViewLayout(t *testing.T) {
+	t.Parallel()
+
+	t.Run("view fits the terminal height", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+		m = got.(Model)
+
+		gotView := m.View()
+
+		require.Equal(t, 30, lipgloss.Height(gotView))
+	})
+
+	t.Run("titles row follows the active tab", func(t *testing.T) {
+		t.Parallel()
+
+		type testCase struct {
+			name      string
+			tab       tabID
+			wantLeft  string
+			wantRight string
+		}
+		tests := []testCase{
+			{name: "containers", tab: tabContainers, wantLeft: " containers", wantRight: " logs"},
+			{name: "volumes", tab: tabVolumes, wantLeft: " volumes", wantRight: " detail"},
+			{name: "networks", tab: tabNetworks, wantLeft: " networks", wantRight: " detail"},
+		}
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+				got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+				m = got.(Model)
+				m.tab = tc.tab
+
+				titlesRow := strings.Split(m.View(), "\n")[1]
+
+				require.Contains(t, titlesRow, tc.wantLeft)
+				require.Contains(t, titlesRow, tc.wantRight)
+			})
+		}
 	})
 }
 
