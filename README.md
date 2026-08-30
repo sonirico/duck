@@ -17,6 +17,8 @@ A terminal UI for Docker: live container tree, aggregated stack logs, and intera
 - **Correct stdout/stderr demuxing**: logs are demultiplexed with `stdcopy`, so non-TTY containers render cleanly.
 - **Volumes tab**: press 2 to list volumes with drivers and usage; unused volumes can be deleted with a y/n confirmation.
 - **Networks tab**: press 3 to list networks with driver, subnet and usage; unused non-builtin networks can be deleted with a y/n confirmation.
+- **Container lifecycle operations**: stop, start, restart, pause/unpause, kill and remove (with a y/n confirmation) the selected container directly from the list.
+- **Compose view**: press `y` to view the docker-compose file reconstructed from the Docker API, without reading the filesystem.
 
 ## Aggregated logs
 
@@ -56,7 +58,15 @@ just build
 | `g` / `G` | container list | jump to top / bottom     |
 | `tab`     | anywhere    | switch focus between list and logs |
 | `1` / `2` / `3` | anywhere | switch tab containers/volumes/networks |
+| `left` / `right` | anywhere | cycle tab containers/volumes/networks |
 | `e`       | container list | open an interactive shell in the selected container |
+| `s` / `S` | container list | stop / start the selected container |
+| `r`       | container list | restart the selected container       |
+| `p`       | container list | pause / unpause the selected container |
+| `K`       | container list | kill the selected container          |
+| `d`       | container list | remove the selected container (asks y/n) |
+| `y`       | container list | view the reconstructed docker-compose |
+| `esc`     | compose view | close the compose view                |
 | `q`       | anywhere    | quit                      |
 | `j` / `k` | logs panel  | scroll                    |
 | `g`       | logs panel  | jump to top, stop following |
