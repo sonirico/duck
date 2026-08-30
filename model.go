@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"hash/fnv"
 	"os/exec"
@@ -130,6 +131,7 @@ type resourceClient interface {
 	ContainerUnpause(ctx context.Context, containerID string, options client.ContainerUnpauseOptions) (client.ContainerUnpauseResult, error)
 	ContainerRemove(ctx context.Context, containerID string, options client.ContainerRemoveOptions) (client.ContainerRemoveResult, error)
 	ContainerInspect(ctx context.Context, containerID string, options client.ContainerInspectOptions) (client.ContainerInspectResult, error)
+	ContainerStats(ctx context.Context, containerID string, options client.ContainerStatsOptions) (client.ContainerStatsResult, error)
 	ImageInspect(ctx context.Context, imageID string, inspectOpts ...client.ImageInspectOption) (client.ImageInspectResult, error)
 	ImageRemove(ctx context.Context, imageID string, options client.ImageRemoveOptions) (client.ImageRemoveResult, error)
 	ContainerPrune(ctx context.Context, opts client.ContainerPruneOptions) (client.ContainerPruneResult, error)
@@ -169,8 +171,10 @@ type Model struct {
 	compose   string
 	composeVP viewport.Model
 
-	detail   string
-	detailVP viewport.Model
+	detail    string
+	detailVP  viewport.Model
+	detailRow *row
+	stats     map[string]ContainerStat
 
 	width  int
 	height int
@@ -243,6 +247,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.err = msg.err
 		return m, nil
 
+	case statsMsg:
+		if m.stats == nil {
+			m.stats = make(map[string]ContainerStat)
+		}
+		for _, s := range msg.stats {
+			m.stats[s.ID] = s
+		}
+		if m.detailRow != nil {
+			switch m.detailRow.kind {
+			case rowStack:
+				m.detail = m.renderStackDetail(m.detailRow.project)
+			case rowContainer:
+				m.detail = m.renderContainerDetail(m.detailRow.container)
+			}
+			m.detailVP.SetContent(m.detail)
+		}
+		return m, nil
+
 	case composeMsg:
 		m.compose = msg.yaml
 		m.composeVP.SetContent(msg.yaml)
@@ -307,6 +329,7 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.detail != "" {
 		if msg.String() == "esc" {
 			m.detail = ""
+			m.detailRow = nil
 			return m, nil
 		}
 		var cmd tea.Cmd
@@ -410,7 +433,22 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			m.detailVP.SetContent(m.detail)
 			m.detailVP.GotoTop()
-			return m, nil
+			rowCopy := r
+			m.detailRow = &rowCopy
+			var ids []string
+			switch r.kind {
+			case rowContainer:
+				if r.container.State == "running" {
+					ids = []string{r.container.ID}
+				}
+			case rowStack:
+				for _, c := range m.containers {
+					if c.Project == r.project && c.State == "running" {
+						ids = append(ids, c.ID)
+					}
+				}
+			}
+			return m, m.statsCmd(ids)
 		}
 	case "e":
 		if m.confirm == nil && m.cursor >= 0 && m.cursor < len(m.rows) && m.rows[m.cursor].kind == rowContainer {
@@ -772,6 +810,33 @@ func (m Model) composeCmd() tea.Cmd {
 	}
 }
 
+func (m Model) statsCmd(ids []string) tea.Cmd {
+	if len(ids) == 0 {
+		return nil
+	}
+	resources := m.resources
+	return func() tea.Msg {
+		stats := make([]ContainerStat, 0, len(ids))
+		for _, id := range ids {
+			res, err := resources.ContainerStats(context.Background(), id, client.ContainerStatsOptions{IncludePreviousSample: true})
+			if err != nil {
+				return watcherErrMsg{err: err}
+			}
+			var sr container.StatsResponse
+			decErr := json.NewDecoder(res.Body).Decode(&sr)
+			closeErr := res.Body.Close()
+			if decErr != nil {
+				return watcherErrMsg{err: decErr}
+			}
+			if closeErr != nil {
+				return watcherErrMsg{err: closeErr}
+			}
+			stats = append(stats, newContainerStatFromResponse(id, sr))
+		}
+		return statsMsg{stats: stats}
+	}
+}
+
 func (m Model) selectedKey() string {
 	if m.cursor < 0 || m.cursor >= len(m.rows) {
 		return ""
@@ -965,6 +1030,10 @@ func (m Model) renderContainerDetail(c Container) string {
 	b.WriteString("image: " + c.Image + "\n")
 	b.WriteString("state: " + c.State + "\n")
 	b.WriteString("status: " + c.Status + "\n")
+	if s, ok := m.stats[c.ID]; ok {
+		b.WriteString("cpu: " + fmt.Sprintf("%.1f%%", s.CPUPercent) + "\n")
+		b.WriteString("mem: " + formatMemBytes(s.MemUsage) + " / " + formatMemBytes(s.MemLimit) + "\n")
+	}
 	if c.Project != "" {
 		b.WriteString("project: " + c.Project + "\n")
 	}
@@ -1020,7 +1089,11 @@ func (m Model) renderStackDetail(project string) string {
 		if label == "" {
 			label = c.Name
 		}
-		b.WriteString("  " + dot + " " + label + "  " + styleDim.Render(c.Image) + "\n")
+		line := "  " + dot + " " + label + "  " + styleDim.Render(c.Image)
+		if s, ok := m.stats[c.ID]; ok {
+			line += "  " + styleDim.Render(fmt.Sprintf("cpu %.1f%%  mem %s", s.CPUPercent, formatMemBytes(s.MemUsage)))
+		}
+		b.WriteString(line + "\n")
 	}
 
 	ports := make(map[string]struct{})

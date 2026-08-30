@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"testing"
 
@@ -35,6 +36,7 @@ type testResourceClient struct {
 	containerOpErr   error
 	containerInspect client.ContainerInspectResult
 	imageInspect     client.ImageInspectResult
+	containerStats   func(ctx context.Context, containerID string, options client.ContainerStatsOptions) (client.ContainerStatsResult, error)
 	calls            []testResourceCall
 }
 
@@ -115,6 +117,11 @@ func (c *testResourceClient) ContainerInspect(ctx context.Context, containerID s
 func (c *testResourceClient) ImageInspect(ctx context.Context, imageID string, inspectOpts ...client.ImageInspectOption) (client.ImageInspectResult, error) {
 	c.calls = append(c.calls, testResourceCall{method: "image-inspect", id: imageID})
 	return c.imageInspect, nil
+}
+
+func (c *testResourceClient) ContainerStats(ctx context.Context, containerID string, options client.ContainerStatsOptions) (client.ContainerStatsResult, error) {
+	c.calls = append(c.calls, testResourceCall{method: "stats", id: containerID})
+	return c.containerStats(ctx, containerID, options)
 }
 
 func (c *testResourceClient) ContainerPrune(ctx context.Context, opts client.ContainerPruneOptions) (client.ContainerPruneResult, error) {
@@ -2447,7 +2454,7 @@ func TestDetailView(t *testing.T) {
 
 		gotModel, cmd := m.updateKeys(newTestKeyMsg("enter"))
 
-		assert.Nil(t, cmd)
+		assert.NotNil(t, cmd)
 		detail := gotModel.(Model).detail
 		assert.Contains(t, detail, "services:")
 		assert.Contains(t, detail, "web")
@@ -2546,6 +2553,98 @@ func TestDetailView(t *testing.T) {
 		assert.Contains(t, gotView, "enter detail")
 		assert.Contains(t, gotView, "y compose")
 	})
+
+	t.Run("enter on a running container returns a cmd producing statsMsg with the container stat", func(t *testing.T) {
+		t.Parallel()
+
+		statsJSON := `{"cpu_stats":{"cpu_usage":{"total_usage":150},"system_cpu_usage":2000,"online_cpus":4},"precpu_stats":{"cpu_usage":{"total_usage":100},"system_cpu_usage":1000},"memory_stats":{"usage":1024,"limit":4096}}`
+		resources := newTestResourceClient(nil)
+		resources.containerStats = func(ctx context.Context, containerID string, options client.ContainerStatsOptions) (client.ContainerStatsResult, error) {
+			return client.ContainerStatsResult{Body: io.NopCloser(strings.NewReader(statsJSON))}, nil
+		}
+		m := newTestModel(newTestLogRetargeter(), resources)
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+		m = got.(Model)
+		m.tab = tabContainers
+		m.focus = focusList
+		c := Container{ID: "c1", Name: "web", State: "running"}
+		m.rows = []row{{kind: rowContainer, key: "id:c1", container: c}}
+		m.cursor = 0
+
+		_, cmd := m.updateKeys(newTestKeyMsg("enter"))
+
+		require.NotNil(t, cmd)
+		want := statsMsg{stats: []ContainerStat{{ID: "c1", CPUPercent: 20.0, MemUsage: 1024, MemLimit: 4096}}}
+		assert.Equal(t, want, cmd())
+	})
+
+	t.Run("enter on a stopped container returns no stats cmd", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+		m = got.(Model)
+		m.tab = tabContainers
+		m.focus = focusList
+		c := Container{ID: "c1", Name: "web", State: "exited"}
+		m.rows = []row{{kind: rowContainer, key: "id:c1", container: c}}
+		m.cursor = 0
+
+		_, cmd := m.updateKeys(newTestKeyMsg("enter"))
+
+		assert.Nil(t, cmd)
+	})
+
+	t.Run("esc clears the detail row", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+		m = got.(Model)
+		m.tab = tabContainers
+		m.detail = "name: web\n"
+		m.detailVP.SetContent(m.detail)
+		rowCopy := row{kind: rowContainer, key: "id:c1", container: Container{ID: "c1"}}
+		m.detailRow = &rowCopy
+
+		got, _ = m.updateKeys(newTestKeyMsg("esc"))
+
+		assert.Nil(t, got.(Model).detailRow)
+	})
+
+	t.Run("statsMsg with detail open re-renders the detail with cpu and mem", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+		m = got.(Model)
+		c := Container{ID: "c1", Name: "web", State: "running"}
+		rowCopy := row{kind: rowContainer, key: "id:c1", container: c}
+		m.detailRow = &rowCopy
+		m.detail = m.renderContainerDetail(c)
+		m.detailVP.SetContent(m.detail)
+
+		got, _ = m.Update(statsMsg{stats: []ContainerStat{{ID: "c1", CPUPercent: 20.0, MemUsage: 1024, MemLimit: 4096}}})
+
+		gotModel := got.(Model)
+		assert.Contains(t, gotModel.detail, "cpu: ")
+		assert.Contains(t, gotModel.detail, "mem: ")
+	})
+
+	t.Run("statsMsg without detail open only merges stats without touching detail", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+		m = got.(Model)
+		m.detail = ""
+
+		got, _ = m.Update(statsMsg{stats: []ContainerStat{{ID: "c1", CPUPercent: 20.0, MemUsage: 1024, MemLimit: 4096}}})
+
+		gotModel := got.(Model)
+		assert.Equal(t, "", gotModel.detail)
+		assert.Equal(t, ContainerStat{ID: "c1", CPUPercent: 20.0, MemUsage: 1024, MemLimit: 4096}, gotModel.stats["c1"])
+	})
 }
 
 type testResourceClientWithInspectErr struct {
@@ -2624,6 +2723,10 @@ func (c *testResourceClientWithInspectErr) ImageInspect(ctx context.Context, ima
 		return client.ImageInspectResult{}, c.imageInspectErr
 	}
 	return client.ImageInspectResult{}, nil
+}
+
+func (c *testResourceClientWithInspectErr) ContainerStats(ctx context.Context, containerID string, options client.ContainerStatsOptions) (client.ContainerStatsResult, error) {
+	return client.ContainerStatsResult{Body: io.NopCloser(strings.NewReader("{}"))}, nil
 }
 
 func (c *testResourceClientWithInspectErr) ContainerPrune(ctx context.Context, opts client.ContainerPruneOptions) (client.ContainerPruneResult, error) {
