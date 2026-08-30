@@ -663,7 +663,7 @@ func (m Model) View() string {
 	left := m.paneStyle(focusList).Width(m.listWidth()).Height(m.panesHeight()).Render(list)
 	right := m.paneStyle(focusLogs).Width(m.logsWidth()).Height(m.panesHeight()).Render(rightContent)
 
-	header := styleHeader.Render(" duck ") + " " + renderTabBar(m.tab) + "  " + styleDim.Render(fmt.Sprintf("%d containers", len(m.containers)))
+	header := styleHeader.Render(" 🦆 duck ") + " " + renderTabBar(m.tab) + "  " + styleDim.Render(fmt.Sprintf("%d containers", len(m.containers)))
 	if m.err != nil {
 		header += "  " + styleErr.Render("error: "+m.err.Error())
 	}
@@ -763,7 +763,7 @@ func (m Model) renderList() string {
 		b.WriteString("\n")
 	}
 	if len(m.rows) == 0 {
-		b.WriteString(styleDim.Render("no containers"))
+		b.WriteString(styleDim.Render("no containers 🦆"))
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
@@ -801,7 +801,7 @@ func (m Model) renderVolumeList() string {
 	for _, v := range m.volumes {
 		rows = append(rows, formatVolumeRow(v, used[v.Name]))
 	}
-	return m.renderResourceRows(rows, m.volCursor, "no volumes")
+	return m.renderResourceRows(rows, m.volCursor, "no volumes 🦆")
 }
 
 func formatVolumeRow(v Volume, used int) string {
@@ -810,7 +810,7 @@ func formatVolumeRow(v Volume, used int) string {
 
 func (m Model) renderVolumeDetail() string {
 	if m.volCursor < 0 || m.volCursor >= len(m.volumes) {
-		return styleDim.Render("no volumes")
+		return styleDim.Render("no volumes 🦆")
 	}
 	v := m.volumes[m.volCursor]
 
@@ -857,7 +857,7 @@ func (m Model) renderNetworkList() string {
 	for _, n := range m.networks {
 		rows = append(rows, formatNetworkRow(n, used[n.Name]))
 	}
-	return m.renderResourceRows(rows, m.netCursor, "no networks")
+	return m.renderResourceRows(rows, m.netCursor, "no networks 🦆")
 }
 
 func formatNetworkRow(n Network, used int) string {
@@ -879,7 +879,7 @@ func isBuiltinNetwork(name string) bool {
 
 func (m Model) renderNetworkDetail() string {
 	if m.netCursor < 0 || m.netCursor >= len(m.networks) {
-		return styleDim.Render("no networks")
+		return styleDim.Render("no networks 🦆")
 	}
 	n := m.networks[m.netCursor]
 
