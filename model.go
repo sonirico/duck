@@ -11,6 +11,8 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/image"
 	"github.com/moby/moby/client"
 )
 
@@ -74,6 +76,7 @@ type deleteKind int
 const (
 	deleteVolume deleteKind = iota
 	deleteNetwork
+	deleteContainer
 )
 
 type pendingDelete struct {
@@ -82,9 +85,24 @@ type pendingDelete struct {
 	label string
 }
 
+type containerOp int
+
+const (
+	opStart containerOp = iota
+	opStop
+	opRestart
+	opKill
+	opPause
+	opUnpause
+)
+
 type logLine struct {
 	source string
 	line   string
+}
+
+type composeMsg struct {
+	yaml string
 }
 
 type logRetargeter interface {
@@ -96,6 +114,15 @@ type logRetargeter interface {
 type resourceClient interface {
 	VolumeRemove(ctx context.Context, volumeID string, options client.VolumeRemoveOptions) (client.VolumeRemoveResult, error)
 	NetworkRemove(ctx context.Context, networkID string, options client.NetworkRemoveOptions) (client.NetworkRemoveResult, error)
+	ContainerStart(ctx context.Context, containerID string, options client.ContainerStartOptions) (client.ContainerStartResult, error)
+	ContainerStop(ctx context.Context, containerID string, options client.ContainerStopOptions) (client.ContainerStopResult, error)
+	ContainerRestart(ctx context.Context, containerID string, options client.ContainerRestartOptions) (client.ContainerRestartResult, error)
+	ContainerKill(ctx context.Context, containerID string, options client.ContainerKillOptions) (client.ContainerKillResult, error)
+	ContainerPause(ctx context.Context, containerID string, options client.ContainerPauseOptions) (client.ContainerPauseResult, error)
+	ContainerUnpause(ctx context.Context, containerID string, options client.ContainerUnpauseOptions) (client.ContainerUnpauseResult, error)
+	ContainerRemove(ctx context.Context, containerID string, options client.ContainerRemoveOptions) (client.ContainerRemoveResult, error)
+	ContainerInspect(ctx context.Context, containerID string, options client.ContainerInspectOptions) (client.ContainerInspectResult, error)
+	ImageInspect(ctx context.Context, imageID string, inspectOpts ...client.ImageInspectOption) (client.ImageInspectResult, error)
 }
 
 type Model struct {
@@ -123,6 +150,9 @@ type Model struct {
 	viewport viewport.Model
 	follow   bool
 
+	compose   string
+	composeVP viewport.Model
+
 	width  int
 	height int
 	err    error
@@ -144,6 +174,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport.Width = m.logsWidth()
 		m.viewport.Height = m.panesHeight()
 		m.viewport.SetContent(m.renderLogs())
+		m.composeVP.Width = m.logsWidth()
+		m.composeVP.Height = m.panesHeight()
 		return m, nil
 
 	case containersMsg:
@@ -178,6 +210,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case watcherErrMsg:
 		m.err = msg.err
+		return m, nil
+
+	case composeMsg:
+		m.compose = msg.yaml
+		m.composeVP.SetContent(msg.yaml)
 		return m, nil
 
 	case logResetMsg:
@@ -226,6 +263,16 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	if m.compose != "" {
+		if msg.String() == "esc" {
+			m.compose = ""
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.composeVP, cmd = m.composeVP.Update(msg)
+		return m, cmd
+	}
+
 	if m.focus == focusList {
 		switch msg.String() {
 		case "1":
@@ -239,6 +286,20 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "3":
 			m.tab = tabNetworks
 			m.confirm = nil
+			return m, nil
+		case "right":
+			m.tab = (m.tab + 1) % 3
+			m.confirm = nil
+			if m.tab == tabContainers {
+				return m, m.retarget()
+			}
+			return m, nil
+		case "left":
+			m.tab = (m.tab + 2) % 3
+			m.confirm = nil
+			if m.tab == tabContainers {
+				return m, m.retarget()
+			}
 			return m, nil
 		}
 	}
@@ -290,8 +351,47 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, m.retarget()
 		}
 	case "e":
-		if m.cursor >= 0 && m.cursor < len(m.rows) && m.rows[m.cursor].kind == rowContainer {
+		if m.confirm == nil && m.cursor >= 0 && m.cursor < len(m.rows) && m.rows[m.cursor].kind == rowContainer {
 			return m, m.execCmd(m.rows[m.cursor].container.ID)
+		}
+	case "s":
+		if m.confirm == nil && m.cursor >= 0 && m.cursor < len(m.rows) && m.rows[m.cursor].kind == rowContainer {
+			return m, m.containerOpCmd(opStop, m.rows[m.cursor].container.ID)
+		}
+	case "S":
+		if m.confirm == nil && m.cursor >= 0 && m.cursor < len(m.rows) && m.rows[m.cursor].kind == rowContainer {
+			return m, m.containerOpCmd(opStart, m.rows[m.cursor].container.ID)
+		}
+	case "r":
+		if m.confirm == nil && m.cursor >= 0 && m.cursor < len(m.rows) && m.rows[m.cursor].kind == rowContainer {
+			return m, m.containerOpCmd(opRestart, m.rows[m.cursor].container.ID)
+		}
+	case "K":
+		if m.confirm == nil && m.cursor >= 0 && m.cursor < len(m.rows) && m.rows[m.cursor].kind == rowContainer {
+			return m, m.containerOpCmd(opKill, m.rows[m.cursor].container.ID)
+		}
+	case "p":
+		if m.confirm == nil && m.cursor >= 0 && m.cursor < len(m.rows) && m.rows[m.cursor].kind == rowContainer {
+			container := m.rows[m.cursor].container
+			op := opPause
+			if container.State == "paused" {
+				op = opUnpause
+			}
+			return m, m.containerOpCmd(op, container.ID)
+		}
+	case "d":
+		if m.confirm == nil && m.cursor >= 0 && m.cursor < len(m.rows) && m.rows[m.cursor].kind == rowContainer {
+			container := m.rows[m.cursor].container
+			m.confirm = &pendingDelete{kind: deleteContainer, id: container.ID, label: container.Name}
+		}
+	case "y":
+		if m.confirm != nil {
+			return m.applyConfirm()
+		}
+		return m, m.composeCmd()
+	case "n", "esc":
+		if m.confirm != nil {
+			m.confirm = nil
 		}
 	}
 	return m, nil
@@ -380,6 +480,33 @@ func (m Model) applyConfirm() (Model, tea.Cmd) {
 			_, err = resources.VolumeRemove(context.Background(), id, client.VolumeRemoveOptions{})
 		case deleteNetwork:
 			_, err = resources.NetworkRemove(context.Background(), id, client.NetworkRemoveOptions{})
+		case deleteContainer:
+			_, err = resources.ContainerRemove(context.Background(), id, client.ContainerRemoveOptions{})
+		}
+		if err != nil {
+			return watcherErrMsg{err: err}
+		}
+		return nil
+	}
+}
+
+func (m Model) containerOpCmd(op containerOp, id string) tea.Cmd {
+	resources := m.resources
+	return func() tea.Msg {
+		var err error
+		switch op {
+		case opStart:
+			_, err = resources.ContainerStart(context.Background(), id, client.ContainerStartOptions{})
+		case opStop:
+			_, err = resources.ContainerStop(context.Background(), id, client.ContainerStopOptions{})
+		case opRestart:
+			_, err = resources.ContainerRestart(context.Background(), id, client.ContainerRestartOptions{})
+		case opKill:
+			_, err = resources.ContainerKill(context.Background(), id, client.ContainerKillOptions{})
+		case opPause:
+			_, err = resources.ContainerPause(context.Background(), id, client.ContainerPauseOptions{})
+		case opUnpause:
+			_, err = resources.ContainerUnpause(context.Background(), id, client.ContainerUnpauseOptions{})
 		}
 		if err != nil {
 			return watcherErrMsg{err: err}
@@ -427,6 +554,51 @@ func (m Model) retarget() tea.Cmd {
 	return func() tea.Msg {
 		streamer.SetTargets(ts)
 		return nil
+	}
+}
+
+func (m Model) composeCmd() tea.Cmd {
+	if m.cursor < 0 || m.cursor >= len(m.rows) {
+		return nil
+	}
+	r := m.rows[m.cursor]
+	var ids []string
+	switch r.kind {
+	case rowContainer:
+		ids = []string{r.container.ID}
+	case rowStack:
+		for _, c := range m.containers {
+			if c.Project == r.project {
+				ids = append(ids, c.ID)
+			}
+		}
+	}
+	project := r.project
+	resources := m.resources
+	return func() tea.Msg {
+		containers := make([]container.InspectResponse, 0, len(ids))
+		for _, id := range ids {
+			res, err := resources.ContainerInspect(context.Background(), id, client.ContainerInspectOptions{})
+			if err != nil {
+				return watcherErrMsg{err: err}
+			}
+			containers = append(containers, res.Container)
+		}
+
+		images := make(map[string]image.InspectResponse)
+		for _, c := range containers {
+			if _, ok := images[c.Config.Image]; ok {
+				continue
+			}
+			res, err := resources.ImageInspect(context.Background(), c.Config.Image)
+			if err != nil {
+				return watcherErrMsg{err: err}
+			}
+			images[c.Config.Image] = res.InspectResponse
+		}
+
+		f := newComposeFile(containers, images, project)
+		return composeMsg{yaml: f.render()}
 	}
 }
 
@@ -485,17 +657,22 @@ func (m Model) View() string {
 	} else if m.tab == tabNetworks {
 		list = m.renderNetworkList()
 		rightContent = m.renderNetworkDetail()
+	} else if m.compose != "" {
+		rightContent = m.composeVP.View()
 	}
 	left := m.paneStyle(focusList).Width(m.listWidth()).Height(m.panesHeight()).Render(list)
 	right := m.paneStyle(focusLogs).Width(m.logsWidth()).Height(m.panesHeight()).Render(rightContent)
 
-	header := styleHeader.Render(fmt.Sprintf(" duck  %d containers", len(m.containers)))
+	header := styleHeader.Render(" duck ") + " " + renderTabBar(m.tab) + "  " + styleDim.Render(fmt.Sprintf("%d containers", len(m.containers)))
 	if m.err != nil {
 		header += "  " + styleErr.Render("error: "+m.err.Error())
 	}
 	title := " logs"
 	if m.logTitle != "" {
 		title = " logs: " + m.logTitle
+	}
+	if m.tab == tabContainers && m.compose != "" {
+		title = " compose"
 	}
 	titles := lipgloss.JoinHorizontal(lipgloss.Top,
 		lipgloss.NewStyle().Width(m.listWidth()+2).Render(styleTitle.Render(" containers")),
@@ -523,12 +700,29 @@ func (m Model) View() string {
 			}
 		}
 		footer = resourceFooter(m.confirm, hint)
+	} else if m.tab == tabContainers && m.compose != "" {
+		footer = " j/k scroll  g/G top/bottom  esc back  q quit"
+	} else if m.confirm != nil {
+		footer = resourceFooter(m.confirm, "")
 	} else {
-		footer = " j/k move  g/G top/bottom  tab focus  e exec  1/2/3 tab  q quit"
+		footer = " j/k move  tab focus  e exec  s/S stop/start  r restart  p pause  K kill  d delete  left/right tab  q quit"
 	}
 
 	return header + "\n" + titles + "\n" +
 		lipgloss.JoinHorizontal(lipgloss.Top, left, right) + "\n" + styleDim.Render(footer)
+}
+
+func renderTabBar(tab tabID) string {
+	labels := []string{"1:containers", "2:volumes", "3:networks"}
+	parts := make([]string, len(labels))
+	for i, label := range labels {
+		if tabID(i) == tab {
+			parts[i] = styleSelected.Render(" " + label + " ")
+		} else {
+			parts[i] = styleDim.Render(label)
+		}
+	}
+	return strings.Join(parts, "  ")
 }
 
 func (m Model) renderList() string {
@@ -567,7 +761,7 @@ func (m Model) renderList() string {
 }
 
 func resourceFooter(confirm *pendingDelete, hint string) string {
-	footer := " j/k move  1/2/3 tab  d delete  q quit"
+	footer := " j/k move  left/right tab  d delete  q quit"
 	if confirm != nil {
 		footer += "  delete " + confirm.label + "? y/n"
 	} else if hint != "" {
