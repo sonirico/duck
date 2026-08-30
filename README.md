@@ -21,6 +21,7 @@ A terminal UI for Docker: live container tree, aggregated stack logs, and intera
 - **Container lifecycle operations**: stop, start, restart, pause/unpause, kill and remove (with a y/n confirmation) the selected container directly from the list. Stop, start, restart, kill and remove also apply to an entire selected stack.
 - **Compose view**: press `y` to view the docker-compose file reconstructed from the Docker API, without reading the filesystem.
 - **Detail view**: press `enter` on a stack or container to see its services, ports, volumes and networks, without extra calls to the daemon.
+- **Prune per tab**: press `P` to prune the active tab's resource (stopped containers, dangling images, unused volumes or unused networks), with a y/n confirmation.
 
 ## Aggregated logs
 
@@ -76,6 +77,7 @@ just build
 | `g`       | logs panel  | jump to top, stop following |
 | `G`       | logs panel  | jump to bottom, resume following |
 | `d`       | volumes/networks/images tab | delete unused volume/network/image (asks y/n) |
+| `P`       | anywhere    | prune the active tab's resource (asks y/n) |
 
 ## Development
 
