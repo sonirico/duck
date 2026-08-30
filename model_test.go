@@ -509,22 +509,87 @@ func TestContainerOpKeys(t *testing.T) {
 		assert.Empty(t, resources.calls)
 	})
 
-	t.Run("keys are a no-op over a stack row", func(t *testing.T) {
+	t.Run("p is a no-op over a stack row", func(t *testing.T) {
 		t.Parallel()
 
 		resources := newTestResourceClient(nil)
 		m := newTestModel(newTestLogRetargeter(), resources)
 		m.tab = tabContainers
 		m.focus = focusList
-		m.rows = []row{{kind: rowStack, key: "stack:app"}}
+		m.rows = []row{{kind: rowStack, key: "stack:app", project: "app"}}
 		m.cursor = 0
 
-		for _, key := range []string{"s", "S", "r", "K", "p"} {
-			got, cmd := m.updateKeys(newTestKeyMsg(key))
-			assert.Nil(t, cmd)
-			m = got.(Model)
-		}
+		got, cmd := m.updateKeys(newTestKeyMsg("p"))
+
+		assert.Nil(t, cmd)
+		_ = got.(Model)
 		assert.Empty(t, resources.calls)
+	})
+
+	t.Run("s/S/r/K over a stack row apply to every container in the project", func(t *testing.T) {
+		t.Parallel()
+
+		tests := []struct {
+			name       string
+			key        string
+			wantMethod string
+		}{
+			{name: "s stops every container", key: "s", wantMethod: "stop"},
+			{name: "S starts every container", key: "S", wantMethod: "start"},
+			{name: "r restarts every container", key: "r", wantMethod: "restart"},
+			{name: "K kills every container", key: "K", wantMethod: "kill"},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				resources := newTestResourceClient(nil)
+				m := newTestModel(newTestLogRetargeter(), resources)
+				m.tab = tabContainers
+				m.focus = focusList
+				m.containers = []Container{
+					{ID: "c1", Project: "app"},
+					{ID: "c2", Project: "app"},
+					{ID: "c3", Project: "other"},
+				}
+				m.rows = []row{{kind: rowStack, key: "stack:app", project: "app"}}
+				m.cursor = 0
+
+				_, cmd := m.updateKeys(newTestKeyMsg(tc.key))
+
+				require.NotNil(t, cmd)
+				assert.Nil(t, cmd())
+				require.Len(t, resources.calls, 2)
+				assert.Equal(t, testResourceCall{method: tc.wantMethod, id: "c1"}, resources.calls[0])
+				assert.Equal(t, testResourceCall{method: tc.wantMethod, id: "c2"}, resources.calls[1])
+			})
+		}
+	})
+
+	t.Run("s/S/r/K over a stack row with a pending confirm do nothing", func(t *testing.T) {
+		t.Parallel()
+
+		for _, key := range []string{"s", "S", "r", "K"} {
+			t.Run(key, func(t *testing.T) {
+				t.Parallel()
+
+				resources := newTestResourceClient(nil)
+				m := newTestModel(newTestLogRetargeter(), resources)
+				m.tab = tabContainers
+				m.focus = focusList
+				m.containers = []Container{{ID: "c1", Project: "app"}}
+				m.rows = []row{{kind: rowStack, key: "stack:app", project: "app"}}
+				m.cursor = 0
+				m.confirm = &pendingDelete{kind: deleteContainer, id: "c1", label: "web"}
+
+				got, cmd := m.updateKeys(newTestKeyMsg(key))
+
+				assert.Equal(t, &pendingDelete{kind: deleteContainer, id: "c1", label: "web"}, got.(Model).confirm)
+				assert.Nil(t, cmd)
+				assert.Empty(t, resources.calls)
+			})
+		}
 	})
 
 	t.Run("returns a watcherErrMsg when the container op fails", func(t *testing.T) {
