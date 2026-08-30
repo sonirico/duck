@@ -20,6 +20,7 @@ type watcherClient interface {
 	ContainerList(ctx context.Context, opts client.ContainerListOptions) (client.ContainerListResult, error)
 	VolumeList(ctx context.Context, opts client.VolumeListOptions) (client.VolumeListResult, error)
 	NetworkList(ctx context.Context, opts client.NetworkListOptions) (client.NetworkListResult, error)
+	ImageList(ctx context.Context, opts client.ImageListOptions) (client.ImageListResult, error)
 	Events(ctx context.Context, opts client.EventsListOptions) client.EventsResult
 }
 
@@ -30,11 +31,12 @@ type Watcher struct {
 	store    *Store[Container]
 	volumes  *Store[Volume]
 	networks *Store[Network]
+	images   *Store[Image]
 	send     func(msg any)
 }
 
-func NewWatcher(cli watcherClient, store *Store[Container], volumes *Store[Volume], networks *Store[Network], send func(msg any)) *Watcher {
-	return &Watcher{cli: cli, store: store, volumes: volumes, networks: networks, send: send}
+func NewWatcher(cli watcherClient, store *Store[Container], volumes *Store[Volume], networks *Store[Network], images *Store[Image], send func(msg any)) *Watcher {
+	return &Watcher{cli: cli, store: store, volumes: volumes, networks: networks, images: images, send: send}
 }
 
 func (w *Watcher) RunLoop(ctx context.Context) {
@@ -45,9 +47,10 @@ func (w *Watcher) RunLoop(ctx context.Context) {
 	w.send(containersMsg{containers: w.store.List()})
 	w.send(volumesMsg{volumes: w.volumes.List()})
 	w.send(networksMsg{networks: w.networks.List()})
+	w.send(imagesMsg{images: w.images.List()})
 
 	stream := w.cli.Events(ctx, client.EventsListOptions{
-		Filters: make(client.Filters).Add("type", "container", "volume", "network"),
+		Filters: make(client.Filters).Add("type", "container", "volume", "network", "image"),
 	})
 	for {
 		select {
@@ -72,6 +75,9 @@ func (w *Watcher) snapshot(ctx context.Context) error {
 		return err
 	}
 	if err := w.refreshNetworks(ctx); err != nil {
+		return err
+	}
+	if err := w.refreshImages(ctx); err != nil {
 		return err
 	}
 	return nil
@@ -116,6 +122,19 @@ func (w *Watcher) refreshNetworks(ctx context.Context) error {
 	return nil
 }
 
+func (w *Watcher) refreshImages(ctx context.Context) error {
+	res, err := w.cli.ImageList(ctx, client.ImageListOptions{})
+	if err != nil {
+		return err
+	}
+	is := make([]Image, 0, len(res.Items))
+	for _, i := range res.Items {
+		is = append(is, newImageFromSummary(i))
+	}
+	w.images.SetAll(is)
+	return nil
+}
+
 func (w *Watcher) apply(ctx context.Context, msg events.Message) {
 	switch msg.Type {
 	case events.ContainerEventType:
@@ -146,5 +165,10 @@ func (w *Watcher) apply(ctx context.Context, msg events.Message) {
 			return
 		}
 		w.send(networksMsg{networks: w.networks.List()})
+	case events.ImageEventType:
+		if err := w.refreshImages(ctx); err != nil {
+			return
+		}
+		w.send(imagesMsg{images: w.images.List()})
 	}
 }
