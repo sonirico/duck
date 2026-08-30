@@ -383,20 +383,44 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, m.execCmd(m.rows[m.cursor].container.ID)
 		}
 	case "s":
-		if m.confirm == nil && m.cursor >= 0 && m.cursor < len(m.rows) && m.rows[m.cursor].kind == rowContainer {
-			return m, m.containerOpCmd(opStop, m.rows[m.cursor].container.ID)
+		if m.confirm == nil && m.cursor >= 0 && m.cursor < len(m.rows) {
+			r := m.rows[m.cursor]
+			switch r.kind {
+			case rowContainer:
+				return m, m.containerOpCmd(opStop, []string{r.container.ID})
+			case rowStack:
+				return m, m.containerOpCmd(opStop, m.stackContainerIDs(r.project))
+			}
 		}
 	case "S":
-		if m.confirm == nil && m.cursor >= 0 && m.cursor < len(m.rows) && m.rows[m.cursor].kind == rowContainer {
-			return m, m.containerOpCmd(opStart, m.rows[m.cursor].container.ID)
+		if m.confirm == nil && m.cursor >= 0 && m.cursor < len(m.rows) {
+			r := m.rows[m.cursor]
+			switch r.kind {
+			case rowContainer:
+				return m, m.containerOpCmd(opStart, []string{r.container.ID})
+			case rowStack:
+				return m, m.containerOpCmd(opStart, m.stackContainerIDs(r.project))
+			}
 		}
 	case "r":
-		if m.confirm == nil && m.cursor >= 0 && m.cursor < len(m.rows) && m.rows[m.cursor].kind == rowContainer {
-			return m, m.containerOpCmd(opRestart, m.rows[m.cursor].container.ID)
+		if m.confirm == nil && m.cursor >= 0 && m.cursor < len(m.rows) {
+			r := m.rows[m.cursor]
+			switch r.kind {
+			case rowContainer:
+				return m, m.containerOpCmd(opRestart, []string{r.container.ID})
+			case rowStack:
+				return m, m.containerOpCmd(opRestart, m.stackContainerIDs(r.project))
+			}
 		}
 	case "K":
-		if m.confirm == nil && m.cursor >= 0 && m.cursor < len(m.rows) && m.rows[m.cursor].kind == rowContainer {
-			return m, m.containerOpCmd(opKill, m.rows[m.cursor].container.ID)
+		if m.confirm == nil && m.cursor >= 0 && m.cursor < len(m.rows) {
+			r := m.rows[m.cursor]
+			switch r.kind {
+			case rowContainer:
+				return m, m.containerOpCmd(opKill, []string{r.container.ID})
+			case rowStack:
+				return m, m.containerOpCmd(opKill, m.stackContainerIDs(r.project))
+			}
 		}
 	case "p":
 		if m.confirm == nil && m.cursor >= 0 && m.cursor < len(m.rows) && m.rows[m.cursor].kind == rowContainer {
@@ -405,7 +429,7 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if container.State == "paused" {
 				op = opUnpause
 			}
-			return m, m.containerOpCmd(op, container.ID)
+			return m, m.containerOpCmd(op, []string{container.ID})
 		}
 	case "d":
 		if m.confirm == nil && m.cursor >= 0 && m.cursor < len(m.rows) && m.rows[m.cursor].kind == rowContainer {
@@ -518,29 +542,45 @@ func (m Model) applyConfirm() (Model, tea.Cmd) {
 	}
 }
 
-func (m Model) containerOpCmd(op containerOp, id string) tea.Cmd {
+func (m Model) containerOpCmd(op containerOp, ids []string) tea.Cmd {
 	resources := m.resources
 	return func() tea.Msg {
-		var err error
-		switch op {
-		case opStart:
-			_, err = resources.ContainerStart(context.Background(), id, client.ContainerStartOptions{})
-		case opStop:
-			_, err = resources.ContainerStop(context.Background(), id, client.ContainerStopOptions{})
-		case opRestart:
-			_, err = resources.ContainerRestart(context.Background(), id, client.ContainerRestartOptions{})
-		case opKill:
-			_, err = resources.ContainerKill(context.Background(), id, client.ContainerKillOptions{})
-		case opPause:
-			_, err = resources.ContainerPause(context.Background(), id, client.ContainerPauseOptions{})
-		case opUnpause:
-			_, err = resources.ContainerUnpause(context.Background(), id, client.ContainerUnpauseOptions{})
+		var lastErr error
+		for _, id := range ids {
+			var err error
+			switch op {
+			case opStart:
+				_, err = resources.ContainerStart(context.Background(), id, client.ContainerStartOptions{})
+			case opStop:
+				_, err = resources.ContainerStop(context.Background(), id, client.ContainerStopOptions{})
+			case opRestart:
+				_, err = resources.ContainerRestart(context.Background(), id, client.ContainerRestartOptions{})
+			case opKill:
+				_, err = resources.ContainerKill(context.Background(), id, client.ContainerKillOptions{})
+			case opPause:
+				_, err = resources.ContainerPause(context.Background(), id, client.ContainerPauseOptions{})
+			case opUnpause:
+				_, err = resources.ContainerUnpause(context.Background(), id, client.ContainerUnpauseOptions{})
+			}
+			if err != nil {
+				lastErr = err
+			}
 		}
-		if err != nil {
-			return watcherErrMsg{err: err}
+		if lastErr != nil {
+			return watcherErrMsg{err: lastErr}
 		}
 		return nil
 	}
+}
+
+func (m Model) stackContainerIDs(project string) []string {
+	var ids []string
+	for _, c := range m.containers {
+		if c.Project == project {
+			ids = append(ids, c.ID)
+		}
+	}
+	return ids
 }
 
 func (m Model) execCmd(id string) tea.Cmd {
