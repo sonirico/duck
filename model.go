@@ -159,10 +159,11 @@ type composeMsg struct {
 }
 
 type detailExtra struct {
-	env    []string
-	titles []string
-	procs  [][]string
-	mounts []string
+	env     []string
+	titles  []string
+	procs   [][]string
+	mounts  []string
+	inspect string
 }
 
 type detailExtraMsg struct {
@@ -1038,7 +1039,11 @@ func (m Model) detailExtraCmd(id string, running bool) tea.Cmd {
 			mounts = append(mounts, entry)
 		}
 		sort.Strings(mounts)
-		return detailExtraMsg{id: id, extra: detailExtra{env: res.Container.Config.Env, titles: titles, procs: procs, mounts: mounts}}
+		inspect, err := json.MarshalIndent(res.Container, "", "  ")
+		if err != nil {
+			return watcherErrMsg{err: err}
+		}
+		return detailExtraMsg{id: id, extra: detailExtra{env: res.Container.Config.Env, titles: titles, procs: procs, mounts: mounts, inspect: string(inspect)}}
 	}
 }
 
@@ -1060,8 +1065,10 @@ func (m *Model) syncSubVP() {
 		m.subVP.SetContent(m.renderEnvDetail(r.container))
 	case subTop:
 		m.subVP.SetContent(m.renderTopDetail(r.container))
-	case subStats, subInspect:
+	case subStats:
 		m.subVP.SetContent(m.renderContainerDetail(r.container))
+	case subInspect:
+		m.subVP.SetContent(m.renderInspectDetail(r.container))
 	case subLogs:
 	}
 }
@@ -1456,6 +1463,14 @@ func (m Model) renderTopDetail(c Container) string {
 		b.WriteString(writeRow(proc) + "\n")
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+func (m Model) renderInspectDetail(c Container) string {
+	extra, ok := m.extras[c.ID]
+	if !ok {
+		return styleDim.Render("loading...")
+	}
+	return extra.inspect
 }
 
 func (m Model) renderStackDetail(project string) string {

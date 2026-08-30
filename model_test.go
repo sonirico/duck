@@ -2722,18 +2722,19 @@ func TestDetailView(t *testing.T) {
 		require.NotNil(t, cmd)
 		batch, ok := cmd().(tea.BatchMsg)
 		require.True(t, ok)
-		want := detailExtraMsg{id: "c1", extra: detailExtra{
-			env:    []string{"FOO=bar"},
-			titles: []string{"PID", "CMD"},
-			procs:  [][]string{{"123", "nginx"}},
-		}}
 		var gotExtra tea.Msg
 		for _, sub := range batch {
 			if msg, ok := sub().(detailExtraMsg); ok {
 				gotExtra = msg
 			}
 		}
-		assert.Equal(t, want, gotExtra)
+		require.IsType(t, detailExtraMsg{}, gotExtra)
+		gotDetail := gotExtra.(detailExtraMsg)
+		assert.Equal(t, "c1", gotDetail.id)
+		assert.Equal(t, []string{"FOO=bar"}, gotDetail.extra.env)
+		assert.Equal(t, []string{"PID", "CMD"}, gotDetail.extra.titles)
+		assert.Equal(t, [][]string{{"123", "nginx"}}, gotDetail.extra.procs)
+		assert.NotEmpty(t, gotDetail.extra.inspect)
 	})
 
 	t.Run("enter on a stopped container returns no stats cmd", func(t *testing.T) {
@@ -3088,6 +3089,35 @@ func TestSubtabs(t *testing.T) {
 		m.syncSubVP()
 
 		assert.Contains(t, m.View(), "container not running")
+	})
+
+	t.Run("subInspect without a cached extra shows loading", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestSubtabModel(t)
+		m.rows = []row{{kind: rowContainer, key: "id:c1", container: Container{ID: "c1", State: "running"}}}
+		m.cursor = 0
+		m.subtab = subInspect
+		m.syncSubVP()
+
+		assert.Contains(t, m.View(), "loading...")
+	})
+
+	t.Run("subInspect with an injected extra shows the container JSON", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestSubtabModel(t)
+		m.rows = []row{{kind: rowContainer, key: "id:c1", container: Container{ID: "c1", State: "running"}}}
+		m.cursor = 0
+		m.subtab = subInspect
+		m.syncSubVP()
+
+		got, _ := m.Update(detailExtraMsg{id: "c1", extra: detailExtra{inspect: `{
+  "Name": "c1"
+}`}})
+
+		gotView := got.(Model).View()
+		assert.Contains(t, gotView, `"Name"`)
 	})
 
 	t.Run("entering subEnv without a cached extra dispatches a fetch cmd", func(t *testing.T) {
