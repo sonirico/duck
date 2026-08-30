@@ -114,6 +114,17 @@ type composeMsg struct {
 	yaml string
 }
 
+type detailExtra struct {
+	env    []string
+	titles []string
+	procs  [][]string
+}
+
+type detailExtraMsg struct {
+	id    string
+	extra detailExtra
+}
+
 type logRetargeter interface {
 	SetTargets(ts []LogTarget)
 }
@@ -132,6 +143,7 @@ type resourceClient interface {
 	ContainerRemove(ctx context.Context, containerID string, options client.ContainerRemoveOptions) (client.ContainerRemoveResult, error)
 	ContainerInspect(ctx context.Context, containerID string, options client.ContainerInspectOptions) (client.ContainerInspectResult, error)
 	ContainerStats(ctx context.Context, containerID string, options client.ContainerStatsOptions) (client.ContainerStatsResult, error)
+	ContainerTop(ctx context.Context, containerID string, options client.ContainerTopOptions) (client.ContainerTopResult, error)
 	ImageInspect(ctx context.Context, imageID string, inspectOpts ...client.ImageInspectOption) (client.ImageInspectResult, error)
 	ImageRemove(ctx context.Context, imageID string, options client.ImageRemoveOptions) (client.ImageRemoveResult, error)
 	ContainerPrune(ctx context.Context, opts client.ContainerPruneOptions) (client.ContainerPruneResult, error)
@@ -175,6 +187,7 @@ type Model struct {
 	detailVP  viewport.Model
 	detailRow *row
 	stats     map[string]ContainerStat
+	extras    map[string]detailExtra
 
 	width  int
 	height int
@@ -254,6 +267,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		for _, s := range msg.stats {
 			m.stats[s.ID] = s
 		}
+		if m.detailRow != nil {
+			switch m.detailRow.kind {
+			case rowStack:
+				m.detail = m.renderStackDetail(m.detailRow.project)
+			case rowContainer:
+				m.detail = m.renderContainerDetail(m.detailRow.container)
+			}
+			m.detailVP.SetContent(m.detail)
+		}
+		return m, nil
+
+	case detailExtraMsg:
+		if m.extras == nil {
+			m.extras = make(map[string]detailExtra)
+		}
+		m.extras[msg.id] = msg.extra
 		if m.detailRow != nil {
 			switch m.detailRow.kind {
 			case rowStack:
@@ -440,6 +469,7 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			case rowContainer:
 				if r.container.State == "running" {
 					ids = []string{r.container.ID}
+					return m, tea.Batch(m.statsCmd(ids), m.detailExtraCmd(r.container.ID))
 				}
 			case rowStack:
 				for _, c := range m.containers {
@@ -837,6 +867,21 @@ func (m Model) statsCmd(ids []string) tea.Cmd {
 	}
 }
 
+func (m Model) detailExtraCmd(id string) tea.Cmd {
+	resources := m.resources
+	return func() tea.Msg {
+		res, err := resources.ContainerInspect(context.Background(), id, client.ContainerInspectOptions{})
+		if err != nil {
+			return watcherErrMsg{err: err}
+		}
+		top, err := resources.ContainerTop(context.Background(), id, client.ContainerTopOptions{})
+		if err != nil {
+			return watcherErrMsg{err: err}
+		}
+		return detailExtraMsg{id: id, extra: detailExtra{env: res.Container.Config.Env, titles: top.Titles, procs: top.Processes}}
+	}
+}
+
 func (m Model) selectedKey() string {
 	if m.cursor < 0 || m.cursor >= len(m.rows) {
 		return ""
@@ -1057,6 +1102,22 @@ func (m Model) renderContainerDetail(c Container) string {
 		b.WriteString("networks:\n")
 		for _, n := range c.Networks {
 			b.WriteString("  " + n + "\n")
+		}
+	}
+
+	if extra, ok := m.extras[c.ID]; ok {
+		if len(extra.env) > 0 {
+			b.WriteString("env:\n")
+			for _, e := range extra.env {
+				b.WriteString("  " + e + "\n")
+			}
+		}
+		if len(extra.procs) > 0 {
+			b.WriteString("top:\n")
+			b.WriteString("  " + strings.Join(extra.titles, "  ") + "\n")
+			for _, p := range extra.procs {
+				b.WriteString("  " + strings.Join(p, "  ") + "\n")
+			}
 		}
 	}
 
