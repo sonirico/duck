@@ -3164,6 +3164,33 @@ func TestSubtabs(t *testing.T) {
 		assert.NotNil(t, cmd)
 	})
 
+	t.Run("statsTickStartCmd with cursor out of range returns nil", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestSubtabModel(t)
+		m.rows = []row{{kind: rowContainer, key: "id:c1", container: Container{ID: "c1", State: "running"}}}
+		m.cursor = 1
+
+		cmd := m.statsTickStartCmd()
+
+		assert.Nil(t, cmd)
+	})
+
+	t.Run("statsTickStartCmd while already ticking returns a cmd without re-batching the tick", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestSubtabModel(t)
+		m.rows = []row{{kind: rowContainer, key: "id:c1", container: Container{ID: "c1", State: "running"}}}
+		m.cursor = 0
+		m.subtab = subStats
+		m.statsTicking = true
+
+		cmd := m.statsTickStartCmd()
+
+		require.NotNil(t, cmd)
+		assert.True(t, m.statsTicking)
+	})
+
 	t.Run("statsTickMsg with subStats active over a running container returns a non-nil cmd", func(t *testing.T) {
 		t.Parallel()
 
