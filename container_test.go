@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net/netip"
 	"testing"
 
 	"github.com/moby/moby/api/types/container"
@@ -42,18 +43,19 @@ func TestNewContainerFromSummary(t *testing.T) {
 				Status:  "Up 2 minutes",
 				Project: "proj",
 				Service: "svc",
+				Ports:   []string{},
 				Volumes: []string{"data"},
 			},
 		},
 		{
 			name: "without name",
 			in:   container.Summary{ID: "c2"},
-			want: Container{ID: "c2", Name: "", Volumes: []string{}},
+			want: Container{ID: "c2", Name: "", Ports: []string{}, Volumes: []string{}},
 		},
 		{
 			name: "without mounts",
 			in:   container.Summary{ID: "c3", Names: []string{"/db"}},
-			want: Container{ID: "c3", Name: "db", Volumes: []string{}},
+			want: Container{ID: "c3", Name: "db", Ports: []string{}, Volumes: []string{}},
 		},
 		{
 			name: "with network settings",
@@ -67,7 +69,46 @@ func TestNewContainerFromSummary(t *testing.T) {
 					},
 				},
 			},
-			want: Container{ID: "c4", Name: "api", Volumes: []string{}, Networks: []string{"backend", "web"}},
+			want: Container{ID: "c4", Name: "api", Ports: []string{}, Volumes: []string{}, Networks: []string{"backend", "web"}},
+		},
+		{
+			name: "with published port",
+			in: container.Summary{
+				ID:    "c5",
+				Names: []string{"/pub"},
+				Ports: []container.PortSummary{
+					{PrivatePort: 80, PublicPort: 8080, Type: "tcp"},
+				},
+			},
+			want: Container{ID: "c5", Name: "pub", Ports: []string{"8080:80/tcp"}, Volumes: []string{}},
+		},
+		{
+			name: "with unpublished port",
+			in: container.Summary{
+				ID:    "c6",
+				Names: []string{"/unpub"},
+				Ports: []container.PortSummary{
+					{PrivatePort: 80, Type: "tcp"},
+				},
+			},
+			want: Container{ID: "c6", Name: "unpub", Ports: []string{"80/tcp"}, Volumes: []string{}},
+		},
+		{
+			name: "with duplicate port binding across IPs",
+			in: container.Summary{
+				ID:    "c7",
+				Names: []string{"/dup"},
+				Ports: []container.PortSummary{
+					{IP: netip.MustParseAddr("0.0.0.0"), PrivatePort: 80, PublicPort: 8080, Type: "tcp"},
+					{IP: netip.MustParseAddr("::"), PrivatePort: 80, PublicPort: 8080, Type: "tcp"},
+				},
+			},
+			want: Container{ID: "c7", Name: "dup", Ports: []string{"8080:80/tcp"}, Volumes: []string{}},
+		},
+		{
+			name: "without ports",
+			in:   container.Summary{ID: "c8", Names: []string{"/noport"}},
+			want: Container{ID: "c8", Name: "noport", Ports: []string{}, Volumes: []string{}},
 		},
 	}
 
