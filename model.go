@@ -61,14 +61,23 @@ const (
 	focusLogs
 )
 
+type tabID int
+
 const (
-	tabContainers int = iota
+	tabContainers tabID = iota
 	tabVolumes
 	tabNetworks
 )
 
+type deleteKind int
+
+const (
+	deleteVolume deleteKind = iota
+	deleteNetwork
+)
+
 type pendingDelete struct {
-	kind  string
+	kind  deleteKind
 	id    string
 	label string
 }
@@ -94,7 +103,7 @@ type Model struct {
 	tmux      TmuxInfo
 	resources resourceClient
 
-	tab int
+	tab tabID
 
 	containers []Container
 	rows       []row
@@ -290,25 +299,8 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) updateVolumeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "j", "down":
-		if m.volCursor < len(m.volumes)-1 {
-			m.volCursor++
-		}
-		return m, nil
-	case "k", "up":
-		if m.volCursor > 0 {
-			m.volCursor--
-		}
-		return m, nil
-	case "g":
-		if len(m.volumes) > 0 {
-			m.volCursor = 0
-		}
-		return m, nil
-	case "G":
-		if len(m.volumes) > 0 {
-			m.volCursor = len(m.volumes) - 1
-		}
+	case "j", "down", "k", "up", "g", "G":
+		m.volCursor = moveListCursor(m.volCursor, len(m.volumes), msg.String())
 		return m, nil
 	case "d":
 		if m.confirm != nil || m.volCursor < 0 || m.volCursor >= len(m.volumes) {
@@ -316,7 +308,7 @@ func (m Model) updateVolumeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		v := m.volumes[m.volCursor]
 		if volumeUsedBy(m.volumes, m.containers)[v.Name] == 0 {
-			m.confirm = &pendingDelete{kind: "volume", id: v.Name, label: v.Name}
+			m.confirm = &pendingDelete{kind: deleteVolume, id: v.Name, label: v.Name}
 		}
 		return m, nil
 	case "y":
@@ -330,25 +322,8 @@ func (m Model) updateVolumeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) updateNetworkKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "j", "down":
-		if m.netCursor < len(m.networks)-1 {
-			m.netCursor++
-		}
-		return m, nil
-	case "k", "up":
-		if m.netCursor > 0 {
-			m.netCursor--
-		}
-		return m, nil
-	case "g":
-		if len(m.networks) > 0 {
-			m.netCursor = 0
-		}
-		return m, nil
-	case "G":
-		if len(m.networks) > 0 {
-			m.netCursor = len(m.networks) - 1
-		}
+	case "j", "down", "k", "up", "g", "G":
+		m.netCursor = moveListCursor(m.netCursor, len(m.networks), msg.String())
 		return m, nil
 	case "d":
 		if m.confirm != nil || m.netCursor < 0 || m.netCursor >= len(m.networks) {
@@ -356,7 +331,7 @@ func (m Model) updateNetworkKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		n := m.networks[m.netCursor]
 		if networkUsedBy(m.networks, m.containers)[n.Name] == 0 && !isBuiltinNetwork(n.Name) {
-			m.confirm = &pendingDelete{kind: "network", id: n.ID, label: n.Name}
+			m.confirm = &pendingDelete{kind: deleteNetwork, id: n.ID, label: n.Name}
 		}
 		return m, nil
 	case "y":
@@ -366,6 +341,28 @@ func (m Model) updateNetworkKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	return m, nil
+}
+
+func moveListCursor(cursor, length int, key string) int {
+	switch key {
+	case "j", "down":
+		if cursor < length-1 {
+			return cursor + 1
+		}
+	case "k", "up":
+		if cursor > 0 {
+			return cursor - 1
+		}
+	case "g":
+		if length > 0 {
+			return 0
+		}
+	case "G":
+		if length > 0 {
+			return length - 1
+		}
+	}
+	return cursor
 }
 
 func (m Model) applyConfirm() (Model, tea.Cmd) {
@@ -379,9 +376,9 @@ func (m Model) applyConfirm() (Model, tea.Cmd) {
 	return m, func() tea.Msg {
 		var err error
 		switch kind {
-		case "volume":
+		case deleteVolume:
 			_, err = resources.VolumeRemove(context.Background(), id, client.VolumeRemoveOptions{})
-		case "network":
+		case deleteNetwork:
 			_, err = resources.NetworkRemove(context.Background(), id, client.NetworkRemoveOptions{})
 		}
 		if err != nil {
@@ -507,27 +504,25 @@ func (m Model) View() string {
 
 	var footer string
 	if m.tab == tabVolumes {
-		footer = " j/k move  1/2/3 tab  d delete  q quit"
-		if m.confirm != nil {
-			footer += "  delete " + m.confirm.label + "? y/n"
-		} else if m.volCursor >= 0 && m.volCursor < len(m.volumes) {
+		hint := ""
+		if m.volCursor >= 0 && m.volCursor < len(m.volumes) {
 			if volumeUsedBy(m.volumes, m.containers)[m.volumes[m.volCursor].Name] > 0 {
-				footer += "  d: volume in use"
+				hint = "d: volume in use"
 			}
 		}
+		footer = resourceFooter(m.confirm, hint)
 	} else if m.tab == tabNetworks {
-		footer = " j/k move  1/2/3 tab  d delete  q quit"
-		if m.confirm != nil {
-			footer += "  delete " + m.confirm.label + "? y/n"
-		} else if m.netCursor >= 0 && m.netCursor < len(m.networks) {
+		hint := ""
+		if m.netCursor >= 0 && m.netCursor < len(m.networks) {
 			n := m.networks[m.netCursor]
 			used := networkUsedBy(m.networks, m.containers)[n.Name]
 			if used > 0 {
-				footer += "  d: network in use"
+				hint = "d: network in use"
 			} else if isBuiltinNetwork(n.Name) {
-				footer += "  d: builtin network"
+				hint = "d: builtin network"
 			}
 		}
+		footer = resourceFooter(m.confirm, hint)
 	} else {
 		footer = " j/k move  g/G top/bottom  tab focus  e exec  1/2/3 tab  q quit"
 	}
@@ -571,22 +566,40 @@ func (m Model) renderList() string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
-func (m Model) renderVolumeList() string {
+func resourceFooter(confirm *pendingDelete, hint string) string {
+	footer := " j/k move  1/2/3 tab  d delete  q quit"
+	if confirm != nil {
+		footer += "  delete " + confirm.label + "? y/n"
+	} else if hint != "" {
+		footer += "  " + hint
+	}
+	return footer
+}
+
+func (m Model) renderResourceRows(rows []string, cursor int, empty string) string {
 	var b strings.Builder
 	w := m.listWidth()
-	used := volumeUsedBy(m.volumes, m.containers)
-	for i, v := range m.volumes {
-		line := truncate(formatVolumeRow(v, used[v.Name]), w)
-		if i == m.volCursor {
+	for i, row := range rows {
+		line := truncate(row, w)
+		if i == cursor {
 			line = styleSelected.Render(fmt.Sprintf("%-*s", w, line))
 		}
 		b.WriteString(line)
 		b.WriteString("\n")
 	}
-	if len(m.volumes) == 0 {
-		b.WriteString(styleDim.Render("no volumes"))
+	if len(rows) == 0 {
+		b.WriteString(styleDim.Render(empty))
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+func (m Model) renderVolumeList() string {
+	used := volumeUsedBy(m.volumes, m.containers)
+	rows := make([]string, 0, len(m.volumes))
+	for _, v := range m.volumes {
+		rows = append(rows, formatVolumeRow(v, used[v.Name]))
+	}
+	return m.renderResourceRows(rows, m.volCursor, "no volumes")
 }
 
 func formatVolumeRow(v Volume, used int) string {
@@ -637,21 +650,12 @@ func (m Model) renderVolumeDetail() string {
 }
 
 func (m Model) renderNetworkList() string {
-	var b strings.Builder
-	w := m.listWidth()
 	used := networkUsedBy(m.networks, m.containers)
-	for i, n := range m.networks {
-		line := truncate(formatNetworkRow(n, used[n.Name]), w)
-		if i == m.netCursor {
-			line = styleSelected.Render(fmt.Sprintf("%-*s", w, line))
-		}
-		b.WriteString(line)
-		b.WriteString("\n")
+	rows := make([]string, 0, len(m.networks))
+	for _, n := range m.networks {
+		rows = append(rows, formatNetworkRow(n, used[n.Name]))
 	}
-	if len(m.networks) == 0 {
-		b.WriteString(styleDim.Render("no networks"))
-	}
-	return strings.TrimRight(b.String(), "\n")
+	return m.renderResourceRows(rows, m.netCursor, "no networks")
 }
 
 func formatNetworkRow(n Network, used int) string {

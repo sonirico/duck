@@ -61,6 +61,8 @@ func TestNewExecArgv(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
 			got := newExecArgv(containerID, tc.dockerHost, tc.tmux)
 
 			assert.Equal(t, tc.want, got)
@@ -114,10 +116,24 @@ func TestNewTmuxInfo(t *testing.T) {
 			version: func() (string, error) { return "tmux 3.7c", nil },
 			want:    TmuxInfo{Present: true, Major: 3, Minor: 7, Pane: "%1"},
 		},
+		{
+			name: "unparseable version",
+			env: func(k string) string {
+				if k == "TMUX" {
+					return "/tmp/tmux-1000/default,123,0"
+				}
+				return ""
+			},
+			look:    func(string) (string, error) { return "/usr/bin/tmux", nil },
+			version: func() (string, error) { return "tmux next-3.4", nil },
+			want:    TmuxInfo{},
+		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
 			got := NewTmuxInfo(tc.env, tc.look, tc.version)
 
 			assert.Equal(t, tc.want, got)

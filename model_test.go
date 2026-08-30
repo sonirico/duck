@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -235,7 +237,7 @@ func TestUpdateKeys(t *testing.T) {
 		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
 		m.focus = focusList
 		m.tab = tabVolumes
-		m.confirm = &pendingDelete{kind: "volume", id: "data"}
+		m.confirm = &pendingDelete{kind: deleteVolume, id: "data"}
 		m.rows = []row{{kind: rowContainer, key: "id:c1"}}
 
 		got, cmd := m.updateKeys(newTestKeyMsg("1"))
@@ -252,7 +254,7 @@ func TestUpdateKeys(t *testing.T) {
 		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
 		m.focus = focusList
 		m.tab = tabContainers
-		m.confirm = &pendingDelete{kind: "volume", id: "data"}
+		m.confirm = &pendingDelete{kind: deleteVolume, id: "data"}
 
 		got, cmd := m.updateKeys(newTestKeyMsg("2"))
 
@@ -268,7 +270,7 @@ func TestUpdateKeys(t *testing.T) {
 		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
 		m.focus = focusList
 		m.tab = tabContainers
-		m.confirm = &pendingDelete{kind: "network", id: "app-net"}
+		m.confirm = &pendingDelete{kind: deleteNetwork, id: "app-net"}
 
 		got, cmd := m.updateKeys(newTestKeyMsg("3"))
 
@@ -429,7 +431,7 @@ func TestUpdateVolumeKeys(t *testing.T) {
 			got, cmd := m.updateVolumeKeys(newTestKeyMsg("d"))
 
 			gotModel := got.(Model)
-			assert.Equal(t, &pendingDelete{kind: "volume", id: "data", label: "data"}, gotModel.confirm)
+			assert.Equal(t, &pendingDelete{kind: deleteVolume, id: "data", label: "data"}, gotModel.confirm)
 			assert.Nil(t, cmd)
 		})
 
@@ -453,7 +455,7 @@ func TestUpdateVolumeKeys(t *testing.T) {
 			m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
 			m.volumes = []Volume{{Name: "data"}}
 			m.volCursor = 0
-			m.confirm = &pendingDelete{kind: "volume", id: "other", label: "other"}
+			m.confirm = &pendingDelete{kind: deleteVolume, id: "other", label: "other"}
 
 			got, cmd := m.updateVolumeKeys(newTestKeyMsg("d"))
 
@@ -497,7 +499,7 @@ func TestUpdateVolumeKeys(t *testing.T) {
 				return client.VolumeRemoveResult{}, nil
 			})
 			m := newTestModel(newTestLogRetargeter(), resources)
-			m.confirm = &pendingDelete{kind: "volume", id: "data", label: "data"}
+			m.confirm = &pendingDelete{kind: deleteVolume, id: "data", label: "data"}
 
 			got, cmd := m.updateVolumeKeys(newTestKeyMsg("y"))
 
@@ -515,7 +517,7 @@ func TestUpdateVolumeKeys(t *testing.T) {
 				return client.VolumeRemoveResult{}, wantErr
 			})
 			m := newTestModel(newTestLogRetargeter(), resources)
-			m.confirm = &pendingDelete{kind: "volume", id: "data", label: "data"}
+			m.confirm = &pendingDelete{kind: deleteVolume, id: "data", label: "data"}
 
 			_, cmd := m.updateVolumeKeys(newTestKeyMsg("y"))
 
@@ -545,7 +547,7 @@ func TestUpdateVolumeKeys(t *testing.T) {
 				t.Parallel()
 
 				m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
-				m.confirm = &pendingDelete{kind: "volume", id: "data", label: "data"}
+				m.confirm = &pendingDelete{kind: deleteVolume, id: "data", label: "data"}
 
 				got, cmd := m.updateVolumeKeys(newTestKeyMsg(key))
 
@@ -553,6 +555,235 @@ func TestUpdateVolumeKeys(t *testing.T) {
 				assert.Nil(t, cmd)
 			})
 		}
+	})
+}
+
+func TestResourceFooter(t *testing.T) {
+	t.Parallel()
+
+	const base = " j/k move  1/2/3 tab  d delete  q quit"
+
+	tests := []struct {
+		name    string
+		confirm *pendingDelete
+		hint    string
+		want    string
+	}{
+		{
+			name:    "no confirm no hint",
+			confirm: nil,
+			hint:    "",
+			want:    base,
+		},
+		{
+			name:    "confirm set",
+			confirm: &pendingDelete{kind: deleteVolume, id: "data", label: "data"},
+			hint:    "",
+			want:    base + "  delete data? y/n",
+		},
+		{
+			name:    "no confirm with hint",
+			confirm: nil,
+			hint:    "d: volume in use",
+			want:    base + "  d: volume in use",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := resourceFooter(tc.confirm, tc.hint)
+
+			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestRenderResourceRows(t *testing.T) {
+	t.Parallel()
+
+	t.Run("empty rows renders the empty label", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+		m = got.(Model)
+
+		gotRows := m.renderResourceRows(nil, 0, "no things")
+
+		require.Equal(t, styleDim.Render("no things"), gotRows)
+	})
+
+	t.Run("cursor row is the selected-styled one", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+		m = got.(Model)
+		w := m.listWidth()
+		rows := []string{"row0", "row1"}
+
+		gotRows := m.renderResourceRows(rows, 1, "no things")
+
+		wantLine0 := truncate("row0", w)
+		wantLine1 := styleSelected.Render(fmt.Sprintf("%-*s", w, truncate("row1", w)))
+		require.Equal(t, wantLine0+"\n"+wantLine1, gotRows)
+	})
+
+	t.Run("long row is truncated", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+		m = got.(Model)
+		longRow := strings.Repeat("x", m.listWidth()+20)
+
+		gotRows := m.renderResourceRows([]string{longRow}, -1, "no things")
+
+		require.Equal(t, truncate(longRow, m.listWidth()), gotRows)
+		require.Contains(t, gotRows, "…")
+	})
+}
+
+func TestRenderVolumeList(t *testing.T) {
+	t.Parallel()
+
+	t.Run("renders a row per volume", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+		m = got.(Model)
+		m.volumes = []Volume{{Name: "data", Driver: "local"}}
+
+		gotList := m.renderVolumeList()
+
+		require.Contains(t, gotList, formatVolumeRow(m.volumes[0], 0))
+	})
+
+	t.Run("renders the empty label with no volumes", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+		m = got.(Model)
+
+		gotList := m.renderVolumeList()
+
+		require.Contains(t, gotList, "no volumes")
+	})
+}
+
+func TestRenderNetworkList(t *testing.T) {
+	t.Parallel()
+
+	t.Run("renders a row per network", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+		m = got.(Model)
+		m.networks = []Network{{Name: "app-net", Driver: "bridge"}}
+
+		gotList := m.renderNetworkList()
+
+		require.Contains(t, gotList, formatNetworkRow(m.networks[0], 0))
+	})
+
+	t.Run("renders the empty label with no networks", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+		m = got.(Model)
+
+		gotList := m.renderNetworkList()
+
+		require.Contains(t, gotList, "no networks")
+	})
+}
+
+func TestViewResourceFooter(t *testing.T) {
+	t.Parallel()
+
+	t.Run("volumes tab shows the in-use hint", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+		m = got.(Model)
+		m.tab = tabVolumes
+		m.volumes = []Volume{{Name: "data"}}
+		m.containers = []Container{{ID: "c1", Volumes: []string{"data"}}}
+		m.volCursor = 0
+
+		gotView := m.View()
+
+		require.Contains(t, gotView, "d: volume in use")
+	})
+
+	t.Run("volumes tab shows the confirm prompt", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+		m = got.(Model)
+		m.tab = tabVolumes
+		m.volumes = []Volume{{Name: "data"}}
+		m.volCursor = 0
+		m.confirm = &pendingDelete{kind: deleteVolume, id: "data", label: "data"}
+
+		gotView := m.View()
+
+		require.Contains(t, gotView, "? y/n")
+	})
+
+	t.Run("networks tab shows the in-use hint", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+		m = got.(Model)
+		m.tab = tabNetworks
+		m.networks = []Network{{ID: "n1", Name: "app-net", Driver: "bridge"}}
+		m.containers = []Container{{ID: "c1", Networks: []string{"app-net"}}}
+		m.netCursor = 0
+
+		gotView := m.View()
+
+		require.Contains(t, gotView, "d: network in use")
+	})
+
+	t.Run("networks tab shows the builtin hint", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+		m = got.(Model)
+		m.tab = tabNetworks
+		m.networks = []Network{{ID: "n1", Name: "bridge", Driver: "bridge"}}
+		m.netCursor = 0
+
+		gotView := m.View()
+
+		require.Contains(t, gotView, "d: builtin network")
+	})
+
+	t.Run("networks tab shows the confirm prompt", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+		m = got.(Model)
+		m.tab = tabNetworks
+		m.networks = []Network{{ID: "n1", Name: "app-net", Driver: "bridge"}}
+		m.netCursor = 0
+		m.confirm = &pendingDelete{kind: deleteNetwork, id: "n1", label: "app-net"}
+
+		gotView := m.View()
+
+		require.Contains(t, gotView, "? y/n")
 	})
 }
 
@@ -691,7 +922,7 @@ func TestUpdateNetworkKeys(t *testing.T) {
 			got, cmd := m.updateNetworkKeys(newTestKeyMsg("d"))
 
 			gotModel := got.(Model)
-			assert.Equal(t, &pendingDelete{kind: "network", id: "n1", label: "app-net"}, gotModel.confirm)
+			assert.Equal(t, &pendingDelete{kind: deleteNetwork, id: "n1", label: "app-net"}, gotModel.confirm)
 			assert.Nil(t, cmd)
 		})
 
@@ -701,7 +932,7 @@ func TestUpdateNetworkKeys(t *testing.T) {
 			m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
 			m.networks = []Network{{ID: "n1", Name: "app-net", Driver: "bridge"}}
 			m.netCursor = 0
-			m.confirm = &pendingDelete{kind: "network", id: "other", label: "other"}
+			m.confirm = &pendingDelete{kind: deleteNetwork, id: "other", label: "other"}
 
 			got, cmd := m.updateNetworkKeys(newTestKeyMsg("d"))
 
@@ -730,7 +961,7 @@ func TestUpdateNetworkKeys(t *testing.T) {
 				t.Parallel()
 
 				m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
-				m.confirm = &pendingDelete{kind: "network", id: "n1", label: "app-net"}
+				m.confirm = &pendingDelete{kind: deleteNetwork, id: "n1", label: "app-net"}
 
 				got, cmd := m.updateNetworkKeys(newTestKeyMsg(key))
 
@@ -763,7 +994,7 @@ func TestUpdateNetworkKeys(t *testing.T) {
 			return client.NetworkRemoveResult{}, nil
 		}
 		m := newTestModel(newTestLogRetargeter(), resources)
-		m.confirm = &pendingDelete{kind: "network", id: "n1", label: "app-net"}
+		m.confirm = &pendingDelete{kind: deleteNetwork, id: "n1", label: "app-net"}
 
 		got, cmd := m.updateNetworkKeys(newTestKeyMsg("y"))
 

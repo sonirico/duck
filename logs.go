@@ -9,11 +9,6 @@ import (
 	"github.com/sonirico/vago/streams"
 )
 
-type LogTarget struct {
-	ID   string
-	Name string
-}
-
 type logResetMsg struct {
 	targets []LogTarget
 }

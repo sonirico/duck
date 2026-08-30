@@ -2,12 +2,8 @@ package main
 
 import (
 	"context"
-	"sort"
-	"strings"
 
-	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/events"
-	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/client"
 )
 
@@ -69,6 +65,19 @@ func (w *Watcher) RunLoop(ctx context.Context) {
 }
 
 func (w *Watcher) snapshot(ctx context.Context) error {
+	if err := w.refreshContainers(ctx); err != nil {
+		return err
+	}
+	if err := w.refreshVolumes(ctx); err != nil {
+		return err
+	}
+	if err := w.refreshNetworks(ctx); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (w *Watcher) refreshContainers(ctx context.Context) error {
 	res, err := w.cli.ContainerList(ctx, client.ContainerListOptions{All: true})
 	if err != nil {
 		return err
@@ -78,23 +87,29 @@ func (w *Watcher) snapshot(ctx context.Context) error {
 		cs = append(cs, newContainerFromSummary(s))
 	}
 	w.store.SetAll(cs)
+	return nil
+}
 
-	vres, err := w.cli.VolumeList(ctx, client.VolumeListOptions{})
+func (w *Watcher) refreshVolumes(ctx context.Context) error {
+	res, err := w.cli.VolumeList(ctx, client.VolumeListOptions{})
 	if err != nil {
 		return err
 	}
-	vs := make([]Volume, 0, len(vres.Items))
-	for _, v := range vres.Items {
+	vs := make([]Volume, 0, len(res.Items))
+	for _, v := range res.Items {
 		vs = append(vs, newVolumeFromSummary(v))
 	}
 	w.volumes.SetAll(vs)
+	return nil
+}
 
-	nres, err := w.cli.NetworkList(ctx, client.NetworkListOptions{})
+func (w *Watcher) refreshNetworks(ctx context.Context) error {
+	res, err := w.cli.NetworkList(ctx, client.NetworkListOptions{})
 	if err != nil {
 		return err
 	}
-	ns := make([]Network, 0, len(nres.Items))
-	for _, n := range nres.Items {
+	ns := make([]Network, 0, len(res.Items))
+	for _, n := range res.Items {
 		ns = append(ns, newNetworkFromSummary(n))
 	}
 	w.networks.SetAll(ns)
@@ -122,58 +137,14 @@ func (w *Watcher) apply(ctx context.Context, msg events.Message) {
 		w.store.Upsert(newContainerFromSummary(res.Items[0]))
 		w.send(containersMsg{containers: w.store.List()})
 	case events.VolumeEventType:
-		res, err := w.cli.VolumeList(ctx, client.VolumeListOptions{})
-		if err != nil {
+		if err := w.refreshVolumes(ctx); err != nil {
 			return
 		}
-		vs := make([]Volume, 0, len(res.Items))
-		for _, v := range res.Items {
-			vs = append(vs, newVolumeFromSummary(v))
-		}
-		w.volumes.SetAll(vs)
 		w.send(volumesMsg{volumes: w.volumes.List()})
 	case events.NetworkEventType:
-		res, err := w.cli.NetworkList(ctx, client.NetworkListOptions{})
-		if err != nil {
+		if err := w.refreshNetworks(ctx); err != nil {
 			return
 		}
-		ns := make([]Network, 0, len(res.Items))
-		for _, n := range res.Items {
-			ns = append(ns, newNetworkFromSummary(n))
-		}
-		w.networks.SetAll(ns)
 		w.send(networksMsg{networks: w.networks.List()})
-	}
-}
-
-func newContainerFromSummary(s container.Summary) Container {
-	name := ""
-	if len(s.Names) > 0 {
-		name = strings.TrimPrefix(s.Names[0], "/")
-	}
-	volumes := make([]string, 0)
-	for _, m := range s.Mounts {
-		if m.Type == mount.TypeVolume {
-			volumes = append(volumes, m.Name)
-		}
-	}
-	var networks []string
-	if s.NetworkSettings != nil {
-		networks = make([]string, 0, len(s.NetworkSettings.Networks))
-		for name := range s.NetworkSettings.Networks {
-			networks = append(networks, name)
-		}
-		sort.Strings(networks)
-	}
-	return Container{
-		ID:       s.ID,
-		Name:     name,
-		Image:    s.Image,
-		State:    string(s.State),
-		Status:   s.Status,
-		Project:  s.Labels["com.docker.compose.project"],
-		Service:  s.Labels["com.docker.compose.service"],
-		Volumes:  volumes,
-		Networks: networks,
 	}
 }

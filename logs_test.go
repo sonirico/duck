@@ -85,7 +85,13 @@ func newTestStreamer(cli logsClient) (*Streamer, chan any) {
 	return NewStreamer(cli, func(msg any) { msgs <- msg }), msgs
 }
 
-func newTestRetargetHarness(t *testing.T) (*Streamer, chan any, chan *testBlockingReadCloser) {
+type retargetFixture struct {
+	s       *Streamer
+	msgs    chan any
+	readers chan *testBlockingReadCloser
+}
+
+func newTestRetargetHarness(t *testing.T) retargetFixture {
 	t.Helper()
 	readers := make(chan *testBlockingReadCloser, 2)
 	cli := newTestLogsClient(inspectOK(false), func(ctx context.Context, id string, opts client.ContainerLogsOptions) (client.ContainerLogsResult, error) {
@@ -97,7 +103,7 @@ func newTestRetargetHarness(t *testing.T) (*Streamer, chan any, chan *testBlocki
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	go s.RunLoop(ctx)
-	return s, msgs, readers
+	return retargetFixture{s: s, msgs: msgs, readers: readers}
 }
 
 func recvMsg[T any](t *testing.T, msgs chan any) T {
@@ -137,6 +143,8 @@ func recvReset(t *testing.T, msgs chan any) logResetMsg {
 
 func TestStreamer(t *testing.T) {
 	t.Run("demux multiplexed stream", func(t *testing.T) {
+		t.Parallel()
+
 		frames := append(
 			newTestMultiplexedFrame(stdcopy.Stdout, []byte("hello stdout\n")),
 			newTestMultiplexedFrame(stdcopy.Stderr, []byte("hello stderr\n"))...,
@@ -156,6 +164,8 @@ func TestStreamer(t *testing.T) {
 	})
 
 	t.Run("tty stream passthrough", func(t *testing.T) {
+		t.Parallel()
+
 		raw := []byte("line one\nline two\n")
 		cli := newTestLogsClient(inspectOK(true), func(ctx context.Context, id string, opts client.ContainerLogsOptions) (client.ContainerLogsResult, error) {
 			return io.NopCloser(bytes.NewReader(raw)), nil
@@ -172,6 +182,8 @@ func TestStreamer(t *testing.T) {
 	})
 
 	t.Run("error line when logs fails", func(t *testing.T) {
+		t.Parallel()
+
 		cli := newTestLogsClient(inspectOK(false), func(ctx context.Context, id string, opts client.ContainerLogsOptions) (client.ContainerLogsResult, error) {
 			return nil, errors.New("boom")
 		})
@@ -186,35 +198,39 @@ func TestStreamer(t *testing.T) {
 	})
 
 	t.Run("retarget emits reset message per selection", func(t *testing.T) {
-		s, msgs, readers := newTestRetargetHarness(t)
+		t.Parallel()
+
+		f := newTestRetargetHarness(t)
 
 		first := LogTarget{ID: "c1", Name: "first"}
-		s.SetTargets([]LogTarget{first})
+		f.s.SetTargets([]LogTarget{first})
 
-		reset := recvReset(t, msgs)
+		reset := recvReset(t, f.msgs)
 		assert.Equal(t, []LogTarget{first}, reset.targets)
 
-		recvReader(t, readers)
+		recvReader(t, f.readers)
 
 		second := LogTarget{ID: "c2", Name: "second"}
-		s.SetTargets([]LogTarget{second})
+		f.s.SetTargets([]LogTarget{second})
 
-		reset = recvReset(t, msgs)
+		reset = recvReset(t, f.msgs)
 		assert.Equal(t, []LogTarget{second}, reset.targets)
 	})
 
 	t.Run("retarget cancels previous stream", func(t *testing.T) {
-		s, msgs, readers := newTestRetargetHarness(t)
+		t.Parallel()
+
+		f := newTestRetargetHarness(t)
 
 		first := LogTarget{ID: "c1", Name: "first"}
-		s.SetTargets([]LogTarget{first})
-		recvReset(t, msgs)
+		f.s.SetTargets([]LogTarget{first})
+		recvReset(t, f.msgs)
 
-		firstReader := recvReader(t, readers)
+		firstReader := recvReader(t, f.readers)
 
 		second := LogTarget{ID: "c2", Name: "second"}
-		s.SetTargets([]LogTarget{second})
-		recvReset(t, msgs)
+		f.s.SetTargets([]LogTarget{second})
+		recvReset(t, f.msgs)
 
 		select {
 		case <-firstReader.cancelled:

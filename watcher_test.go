@@ -8,7 +8,6 @@ import (
 
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/events"
-	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/api/types/volume"
 	"github.com/moby/moby/client"
@@ -84,13 +83,21 @@ func networkListErr(err error) func(ctx context.Context, opts client.NetworkList
 	}
 }
 
-func newTestWatcher(cli watcherClient) (w *Watcher, msgs chan any, store *Store[Container], volumes *Store[Volume], networks *Store[Network]) {
-	msgs = make(chan any, testMsgBufSize)
-	store = NewStore[Container](func(c Container) string { return c.ID }, func(a, b Container) bool { return a.Name < b.Name })
-	volumes = NewStore[Volume](func(v Volume) string { return v.Name }, func(a, b Volume) bool { return a.Name < b.Name })
-	networks = NewStore[Network](func(n Network) string { return n.Name }, func(a, b Network) bool { return a.Name < b.Name })
-	w = NewWatcher(cli, store, volumes, networks, func(msg any) { msgs <- msg })
-	return
+type watcherFixture struct {
+	w        *Watcher
+	msgs     chan any
+	store    *Store[Container]
+	volumes  *Store[Volume]
+	networks *Store[Network]
+}
+
+func newTestWatcherFixture(cli watcherClient) watcherFixture {
+	msgs := make(chan any, testMsgBufSize)
+	store := NewStore[Container](func(c Container) string { return c.ID }, func(a, b Container) bool { return a.Name < b.Name })
+	volumes := NewStore[Volume](func(v Volume) string { return v.Name }, func(a, b Volume) bool { return a.Name < b.Name })
+	networks := NewStore[Network](func(n Network) string { return n.Name }, func(a, b Network) bool { return a.Name < b.Name })
+	w := NewWatcher(cli, store, volumes, networks, func(msg any) { msgs <- msg })
+	return watcherFixture{w: w, msgs: msgs, store: store, volumes: volumes, networks: networks}
 }
 
 func recvContainers(t *testing.T, msgs chan any) containersMsg {
@@ -113,79 +120,6 @@ func recvWatcherErr(t *testing.T, msgs chan any) watcherErrMsg {
 	return recvMsg[watcherErrMsg](t, msgs)
 }
 
-func TestNewContainerFromSummary(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name string
-		in   container.Summary
-		want Container
-	}{
-		{
-			name: "with name and volume mount",
-			in: container.Summary{
-				ID:     "c1",
-				Names:  []string{"/web"},
-				Image:  "nginx",
-				State:  "running",
-				Status: "Up 2 minutes",
-				Labels: map[string]string{
-					"com.docker.compose.project": "proj",
-					"com.docker.compose.service": "svc",
-				},
-				Mounts: []container.MountPoint{
-					{Type: mount.TypeVolume, Name: "data"},
-					{Type: mount.TypeBind, Name: "ignored"},
-				},
-			},
-			want: Container{
-				ID:      "c1",
-				Name:    "web",
-				Image:   "nginx",
-				State:   "running",
-				Status:  "Up 2 minutes",
-				Project: "proj",
-				Service: "svc",
-				Volumes: []string{"data"},
-			},
-		},
-		{
-			name: "without name",
-			in:   container.Summary{ID: "c2"},
-			want: Container{ID: "c2", Name: "", Volumes: []string{}},
-		},
-		{
-			name: "without mounts",
-			in:   container.Summary{ID: "c3", Names: []string{"/db"}},
-			want: Container{ID: "c3", Name: "db", Volumes: []string{}},
-		},
-		{
-			name: "with network settings",
-			in: container.Summary{
-				ID:    "c4",
-				Names: []string{"/api"},
-				NetworkSettings: &container.NetworkSettingsSummary{
-					Networks: map[string]*network.EndpointSettings{
-						"web":     {},
-						"backend": {},
-					},
-				},
-			},
-			want: Container{ID: "c4", Name: "api", Volumes: []string{}, Networks: []string{"backend", "web"}},
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			got := newContainerFromSummary(tc.in)
-
-			require.Equal(t, tc.want, got)
-		})
-	}
-}
-
 func TestWatcherSnapshot(t *testing.T) {
 	t.Parallel()
 
@@ -198,13 +132,13 @@ func TestWatcherSnapshot(t *testing.T) {
 			networkListOK(),
 			nil,
 		)
-		w, _, store, volumes, _ := newTestWatcher(cli)
+		f := newTestWatcherFixture(cli)
 
-		err := w.snapshot(context.Background())
+		err := f.w.snapshot(context.Background())
 
 		require.NoError(t, err)
-		assert.Equal(t, []Container{{ID: "c1", Name: "web", Volumes: []string{}}}, store.List())
-		assert.Equal(t, []Volume{{Name: "data"}}, volumes.List())
+		assert.Equal(t, []Container{{ID: "c1", Name: "web", Volumes: []string{}}}, f.store.List())
+		assert.Equal(t, []Volume{{Name: "data"}}, f.volumes.List())
 	})
 
 	t.Run("container list error", func(t *testing.T) {
@@ -212,13 +146,13 @@ func TestWatcherSnapshot(t *testing.T) {
 
 		wantErr := errors.New("boom")
 		cli := newTestWatcherClient(containerListErr(wantErr), nil, nil, nil)
-		w, _, store, volumes, _ := newTestWatcher(cli)
+		f := newTestWatcherFixture(cli)
 
-		err := w.snapshot(context.Background())
+		err := f.w.snapshot(context.Background())
 
 		assert.Equal(t, wantErr, err)
-		assert.Empty(t, store.List())
-		assert.Empty(t, volumes.List())
+		assert.Empty(t, f.store.List())
+		assert.Empty(t, f.volumes.List())
 	})
 
 	t.Run("volume list error", func(t *testing.T) {
@@ -226,13 +160,13 @@ func TestWatcherSnapshot(t *testing.T) {
 
 		wantErr := errors.New("boom")
 		cli := newTestWatcherClient(containerListOK(container.Summary{ID: "c1"}), volumeListErr(wantErr), nil, nil)
-		w, _, store, volumes, _ := newTestWatcher(cli)
+		f := newTestWatcherFixture(cli)
 
-		err := w.snapshot(context.Background())
+		err := f.w.snapshot(context.Background())
 
 		assert.Equal(t, wantErr, err)
-		assert.Len(t, store.List(), 1)
-		assert.Empty(t, volumes.List())
+		assert.Len(t, f.store.List(), 1)
+		assert.Empty(t, f.volumes.List())
 	})
 
 	t.Run("network list error", func(t *testing.T) {
@@ -240,12 +174,12 @@ func TestWatcherSnapshot(t *testing.T) {
 
 		wantErr := errors.New("boom")
 		cli := newTestWatcherClient(containerListOK(), volumeListOK(), networkListErr(wantErr), nil)
-		w, _, _, _, networks := newTestWatcher(cli)
+		f := newTestWatcherFixture(cli)
 
-		err := w.snapshot(context.Background())
+		err := f.w.snapshot(context.Background())
 
 		assert.Equal(t, wantErr, err)
-		assert.Empty(t, networks.List())
+		assert.Empty(t, f.networks.List())
 	})
 
 	t.Run("success populates networks store", func(t *testing.T) {
@@ -257,12 +191,12 @@ func TestWatcherSnapshot(t *testing.T) {
 			networkListOK(network.Summary{Network: network.Network{Name: "bridge"}}),
 			nil,
 		)
-		w, _, _, _, networks := newTestWatcher(cli)
+		f := newTestWatcherFixture(cli)
 
-		err := w.snapshot(context.Background())
+		err := f.w.snapshot(context.Background())
 
 		require.NoError(t, err)
-		assert.Equal(t, []Network{{Name: "bridge"}}, networks.List())
+		assert.Equal(t, []Network{{Name: "bridge"}}, f.networks.List())
 	})
 }
 
@@ -281,14 +215,14 @@ func TestWatcherApply(t *testing.T) {
 			nil,
 			nil,
 		)
-		w, msgs, store, _, _ := newTestWatcher(cli)
-		store.SetAll([]Container{{ID: "c1", Name: "web"}})
+		f := newTestWatcherFixture(cli)
+		f.store.SetAll([]Container{{ID: "c1", Name: "web"}})
 		msg := events.Message{Type: events.ContainerEventType, Action: events.ActionDestroy, Actor: events.Actor{ID: "c1"}}
 
-		w.apply(context.Background(), msg)
+		f.w.apply(context.Background(), msg)
 
-		assert.Empty(t, store.List())
-		got := recvContainers(t, msgs)
+		assert.Empty(t, f.store.List())
+		got := recvContainers(t, f.msgs)
 		assert.Empty(t, got.containers)
 	})
 
@@ -301,70 +235,70 @@ func TestWatcherApply(t *testing.T) {
 			nil,
 			nil,
 		)
-		w, msgs, store, _, _ := newTestWatcher(cli)
+		f := newTestWatcherFixture(cli)
 		msg := events.Message{Type: events.ContainerEventType, Action: events.ActionStart, Actor: events.Actor{ID: "c1"}}
 
-		w.apply(context.Background(), msg)
+		f.w.apply(context.Background(), msg)
 
-		assert.Equal(t, []Container{{ID: "c1", Name: "web", Volumes: []string{}}}, store.List())
-		got := recvContainers(t, msgs)
-		assert.Equal(t, store.List(), got.containers)
+		assert.Equal(t, []Container{{ID: "c1", Name: "web", Volumes: []string{}}}, f.store.List())
+		got := recvContainers(t, f.msgs)
+		assert.Equal(t, f.store.List(), got.containers)
 	})
 
 	t.Run("container update lookup error deletes from store", func(t *testing.T) {
 		t.Parallel()
 
 		cli := newTestWatcherClient(containerListErr(errors.New("boom")), nil, nil, nil)
-		w, msgs, store, _, _ := newTestWatcher(cli)
-		store.SetAll([]Container{{ID: "c1", Name: "web"}})
+		f := newTestWatcherFixture(cli)
+		f.store.SetAll([]Container{{ID: "c1", Name: "web"}})
 		msg := events.Message{Type: events.ContainerEventType, Action: events.ActionStart, Actor: events.Actor{ID: "c1"}}
 
-		w.apply(context.Background(), msg)
+		f.w.apply(context.Background(), msg)
 
-		assert.Empty(t, store.List())
-		recvContainers(t, msgs)
+		assert.Empty(t, f.store.List())
+		recvContainers(t, f.msgs)
 	})
 
 	t.Run("container update lookup empty deletes from store", func(t *testing.T) {
 		t.Parallel()
 
 		cli := newTestWatcherClient(containerListOK(), nil, nil, nil)
-		w, msgs, store, _, _ := newTestWatcher(cli)
-		store.SetAll([]Container{{ID: "c1", Name: "web"}})
+		f := newTestWatcherFixture(cli)
+		f.store.SetAll([]Container{{ID: "c1", Name: "web"}})
 		msg := events.Message{Type: events.ContainerEventType, Action: events.ActionStart, Actor: events.Actor{ID: "c1"}}
 
-		w.apply(context.Background(), msg)
+		f.w.apply(context.Background(), msg)
 
-		assert.Empty(t, store.List())
-		recvContainers(t, msgs)
+		assert.Empty(t, f.store.List())
+		recvContainers(t, f.msgs)
 	})
 
 	t.Run("volume event success replaces volumes", func(t *testing.T) {
 		t.Parallel()
 
 		cli := newTestWatcherClient(nil, volumeListOK(volume.Volume{Name: "data"}), nil, nil)
-		w, msgs, _, volumes, _ := newTestWatcher(cli)
+		f := newTestWatcherFixture(cli)
 		msg := events.Message{Type: events.VolumeEventType}
 
-		w.apply(context.Background(), msg)
+		f.w.apply(context.Background(), msg)
 
-		assert.Equal(t, []Volume{{Name: "data"}}, volumes.List())
-		got := recvVolumes(t, msgs)
-		assert.Equal(t, volumes.List(), got.volumes)
+		assert.Equal(t, []Volume{{Name: "data"}}, f.volumes.List())
+		got := recvVolumes(t, f.msgs)
+		assert.Equal(t, f.volumes.List(), got.volumes)
 	})
 
 	t.Run("volume event error sends no message", func(t *testing.T) {
 		t.Parallel()
 
 		cli := newTestWatcherClient(nil, volumeListErr(errors.New("boom")), nil, nil)
-		w, msgs, _, volumes, _ := newTestWatcher(cli)
+		f := newTestWatcherFixture(cli)
 		msg := events.Message{Type: events.VolumeEventType}
 
-		w.apply(context.Background(), msg)
+		f.w.apply(context.Background(), msg)
 
-		assert.Empty(t, volumes.List())
+		assert.Empty(t, f.volumes.List())
 		select {
-		case got := <-msgs:
+		case got := <-f.msgs:
 			t.Fatalf("expected no message, got %#v", got)
 		default:
 		}
@@ -374,28 +308,28 @@ func TestWatcherApply(t *testing.T) {
 		t.Parallel()
 
 		cli := newTestWatcherClient(nil, nil, networkListOK(network.Summary{Network: network.Network{Name: "bridge"}}), nil)
-		w, msgs, _, _, networks := newTestWatcher(cli)
+		f := newTestWatcherFixture(cli)
 		msg := events.Message{Type: events.NetworkEventType}
 
-		w.apply(context.Background(), msg)
+		f.w.apply(context.Background(), msg)
 
-		assert.Equal(t, []Network{{Name: "bridge"}}, networks.List())
-		got := recvNetworks(t, msgs)
-		assert.Equal(t, networks.List(), got.networks)
+		assert.Equal(t, []Network{{Name: "bridge"}}, f.networks.List())
+		got := recvNetworks(t, f.msgs)
+		assert.Equal(t, f.networks.List(), got.networks)
 	})
 
 	t.Run("network event error sends no message", func(t *testing.T) {
 		t.Parallel()
 
 		cli := newTestWatcherClient(nil, nil, networkListErr(errors.New("boom")), nil)
-		w, msgs, _, _, networks := newTestWatcher(cli)
+		f := newTestWatcherFixture(cli)
 		msg := events.Message{Type: events.NetworkEventType}
 
-		w.apply(context.Background(), msg)
+		f.w.apply(context.Background(), msg)
 
-		assert.Empty(t, networks.List())
+		assert.Empty(t, f.networks.List())
 		select {
-		case got := <-msgs:
+		case got := <-f.msgs:
 			t.Fatalf("expected no message, got %#v", got)
 		default:
 		}
@@ -418,15 +352,15 @@ func TestWatcherRunLoop(t *testing.T) {
 				return client.EventsResult{}
 			},
 		)
-		w, msgs, _, _, _ := newTestWatcher(cli)
+		f := newTestWatcherFixture(cli)
 
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
-			w.RunLoop(context.Background())
+			f.w.RunLoop(context.Background())
 		}()
 
-		got := recvWatcherErr(t, msgs)
+		got := recvWatcherErr(t, f.msgs)
 		assert.Equal(t, wantErr, got.err)
 
 		select {
@@ -449,24 +383,24 @@ func TestWatcherRunLoop(t *testing.T) {
 				return client.EventsResult{Messages: messages, Err: errs}
 			},
 		)
-		w, msgs, store, _, _ := newTestWatcher(cli)
+		f := newTestWatcherFixture(cli)
 		ctx, cancel := context.WithCancel(context.Background())
 
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
-			w.RunLoop(ctx)
+			f.w.RunLoop(ctx)
 		}()
 
-		initial := recvContainers(t, msgs)
+		initial := recvContainers(t, f.msgs)
 		assert.Equal(t, []Container{{ID: "c1", Name: "web", Volumes: []string{}}}, initial.containers)
-		recvVolumes(t, msgs)
-		recvNetworks(t, msgs)
+		recvVolumes(t, f.msgs)
+		recvNetworks(t, f.msgs)
 
 		messages <- events.Message{Type: events.ContainerEventType, Action: events.ActionDestroy, Actor: events.Actor{ID: "c1"}}
-		updated := recvContainers(t, msgs)
+		updated := recvContainers(t, f.msgs)
 		assert.Empty(t, updated.containers)
-		assert.Empty(t, store.List())
+		assert.Empty(t, f.store.List())
 
 		cancel()
 		select {
@@ -490,20 +424,20 @@ func TestWatcherRunLoop(t *testing.T) {
 				return client.EventsResult{Messages: messages, Err: errs}
 			},
 		)
-		w, msgs, _, _, _ := newTestWatcher(cli)
+		f := newTestWatcherFixture(cli)
 
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
-			w.RunLoop(context.Background())
+			f.w.RunLoop(context.Background())
 		}()
 
-		recvContainers(t, msgs)
-		recvVolumes(t, msgs)
-		recvNetworks(t, msgs)
+		recvContainers(t, f.msgs)
+		recvVolumes(t, f.msgs)
+		recvNetworks(t, f.msgs)
 
 		errs <- wantErr
-		got := recvWatcherErr(t, msgs)
+		got := recvWatcherErr(t, f.msgs)
 		assert.Equal(t, wantErr, got.err)
 
 		select {
