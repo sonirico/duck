@@ -21,11 +21,12 @@ func TestNewContainerFromSummary(t *testing.T) {
 		{
 			name: "with name and volume mount",
 			in: container.Summary{
-				ID:     "c1",
-				Names:  []string{"/web"},
-				Image:  "nginx",
-				State:  "running",
-				Status: "Up 2 minutes",
+				ID:      "c1",
+				Names:   []string{"/web"},
+				Image:   "nginx",
+				ImageID: "sha256:img1",
+				State:   "running",
+				Status:  "Up 2 minutes",
 				Labels: map[string]string{
 					"com.docker.compose.project": "proj",
 					"com.docker.compose.service": "svc",
@@ -39,6 +40,7 @@ func TestNewContainerFromSummary(t *testing.T) {
 				ID:      "c1",
 				Name:    "web",
 				Image:   "nginx",
+				ImageID: "sha256:img1",
 				State:   "running",
 				Status:  "Up 2 minutes",
 				Project: "proj",
@@ -46,6 +48,15 @@ func TestNewContainerFromSummary(t *testing.T) {
 				Ports:   []string{},
 				Volumes: []string{"data"},
 			},
+		},
+		{
+			name: "with image id",
+			in: container.Summary{
+				ID:      "c9",
+				Names:   []string{"/withimg"},
+				ImageID: "sha256:img2",
+			},
+			want: Container{ID: "c9", Name: "withimg", ImageID: "sha256:img2", Ports: []string{}, Volumes: []string{}},
 		},
 		{
 			name: "without name",
