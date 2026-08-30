@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net/netip"
 	"testing"
 
 	dockerspec "github.com/moby/docker-image-spec/specs-go/v1"
@@ -284,6 +285,98 @@ func composeTestCases() []composeTestCase {
 				"networks:\n" +
 				"  app_net: {}\n",
 		},
+		{
+			name: "command y entrypoint personalizados frente a la imagen",
+			containers: []container.InspectResponse{
+				newTestInspect(testInspectOpts{
+					name:       "/proj_runner_1",
+					image:      "runner:latest",
+					labels:     map[string]string{"com.docker.compose.service": "runner"},
+					cmd:        []string{"python", "app.py"},
+					entrypoint: []string{"/bin/sh", "-c"},
+				}),
+			},
+			images: map[string]image.InspectResponse{
+				"runner:latest": newTestImage([]string{"oldcmd"}, []string{"/bin/oldentry"}, nil),
+			},
+			project: "proj",
+			want: composeFile{
+				services: []composeService{
+					{
+						name:       "runner",
+						image:      "runner:latest",
+						command:    []string{"python", "app.py"},
+						entrypoint: []string{"/bin/sh", "-c"},
+					},
+				},
+				volumes:  map[string]string{},
+				networks: map[string]string{},
+			},
+			wantYAML: "services:\n" +
+				"  runner:\n" +
+				"    image: runner:latest\n" +
+				"    command: [\"python\", \"app.py\"]\n" +
+				"    entrypoint: [\"/bin/sh\", \"-c\"]\n",
+		},
+		{
+			name: "puertos multiples con HostIP",
+			containers: []container.InspectResponse{
+				newTestInspect(testInspectOpts{
+					name:   "/proj_api_1",
+					image:  "api",
+					labels: map[string]string{"com.docker.compose.service": "api"},
+					portBindings: network.PortMap{
+						network.MustParsePort("22/tcp"): {{HostPort: "2222"}},
+						network.MustParsePort("80/tcp"): {{HostPort: "8080", HostIP: netip.MustParseAddr("127.0.0.1")}},
+					},
+				}),
+			},
+			images:  map[string]image.InspectResponse{},
+			project: "proj",
+			want: composeFile{
+				services: []composeService{
+					{name: "api", image: "api", ports: []string{"2222:22", "127.0.0.1:8080:80"}},
+				},
+				volumes:  map[string]string{},
+				networks: map[string]string{},
+			},
+			wantYAML: "services:\n" +
+				"  api:\n" +
+				"    image: api\n" +
+				"    ports:\n" +
+				"      - 2222:22\n" +
+				"      - 127.0.0.1:8080:80\n",
+		},
+		{
+			name: "volumen nombrado de solo lectura",
+			containers: []container.InspectResponse{
+				newTestInspect(testInspectOpts{
+					name:   "/proj_cache_1",
+					image:  "redis",
+					labels: map[string]string{"com.docker.compose.service": "cache"},
+					mounts: []container.MountPoint{
+						{Type: mount.TypeVolume, Name: "proj_cachevol", Destination: "/var/cache", RW: false},
+					},
+				}),
+			},
+			images:  map[string]image.InspectResponse{},
+			project: "proj",
+			want: composeFile{
+				services: []composeService{
+					{name: "cache", image: "redis", volumes: []string{"cachevol:/var/cache:ro"}},
+				},
+				volumes:  map[string]string{"cachevol": "proj_cachevol"},
+				networks: map[string]string{},
+			},
+			wantYAML: "services:\n" +
+				"  cache:\n" +
+				"    image: redis\n" +
+				"    volumes:\n" +
+				"      - cachevol:/var/cache:ro\n" +
+				"volumes:\n" +
+				"  cachevol:\n" +
+				"    name: proj_cachevol\n",
+		},
 	}
 }
 
@@ -313,4 +406,32 @@ func TestComposeFileRender(t *testing.T) {
 			require.Equal(t, tc.wantYAML, got)
 		})
 	}
+}
+
+func TestComposeNilConfig(t *testing.T) {
+	t.Parallel()
+
+	t.Run("composePorts con hostConfig nil", func(t *testing.T) {
+		t.Parallel()
+
+		got := composePorts(nil)
+
+		require.Nil(t, got)
+	})
+
+	t.Run("composeNetworks con networkSettings nil", func(t *testing.T) {
+		t.Parallel()
+
+		got := composeNetworks(nil, "proj", map[string]string{})
+
+		require.Nil(t, got)
+	})
+
+	t.Run("composeRestart con hostConfig nil", func(t *testing.T) {
+		t.Parallel()
+
+		got := composeRestart(nil)
+
+		require.Empty(t, got)
+	})
 }
