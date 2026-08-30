@@ -1,0 +1,42 @@
+name: release
+
+# Hosted Actions minutes are exhausted, so this runs on the self-hosted
+# runner on 720, registered per repo (homelab's
+# ansible/playbooks/install-720-runner-duck.yml re-registers it). The
+# runner has no Go, so it is installed per job. The host is shared with
+# production, which is why compile parallelism is capped below.
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  release:
+    runs-on: self-hosted
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      # Caps parallel package builds because 720 shares its 8 GB with production stacks.
+      GOFLAGS: -p=2
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # Standalone statically linked binaries (CGO_ENABLED=0, pure Go):
+      # download, chmod +x, run. install.sh depends on this exact naming.
+      - name: build binaries
+        run: |
+          mkdir -p dist
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+            GOOS=${target%/*} GOARCH=${target#*/} CGO_ENABLED=0 \
+              go build -trimpath -ldflags "-s -w" -o "dist/duck_${target%/*}_${target#*/}" .
+          done
+
+      - name: create release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: dist/*

@@ -29,6 +29,14 @@ A terminal UI for Docker: live container tree, aggregated stack logs, and intera
 ## Install
 
 ```sh
+curl -fsSL https://raw.githubusercontent.com/sonirico/duck/main/install.sh | sh
+```
+
+Downloads the statically linked binary for your platform (linux/darwin, amd64/arm64) from the [latest release](https://github.com/sonirico/duck/releases/latest) into `~/.local/bin` (override with `DUCK_INSTALL_DIR`).
+
+Or with Go:
+
+```sh
 go install github.com/sonirico/duck@latest
 ```
 
