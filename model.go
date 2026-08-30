@@ -74,6 +74,7 @@ type deleteKind int
 const (
 	deleteVolume deleteKind = iota
 	deleteNetwork
+	deleteContainer
 )
 
 type pendingDelete struct {
@@ -113,6 +114,7 @@ type resourceClient interface {
 	ContainerKill(ctx context.Context, containerID string, options client.ContainerKillOptions) (client.ContainerKillResult, error)
 	ContainerPause(ctx context.Context, containerID string, options client.ContainerPauseOptions) (client.ContainerPauseResult, error)
 	ContainerUnpause(ctx context.Context, containerID string, options client.ContainerUnpauseOptions) (client.ContainerUnpauseResult, error)
+	ContainerRemove(ctx context.Context, containerID string, options client.ContainerRemoveOptions) (client.ContainerRemoveResult, error)
 }
 
 type Model struct {
@@ -321,33 +323,46 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, m.retarget()
 		}
 	case "e":
-		if m.cursor >= 0 && m.cursor < len(m.rows) && m.rows[m.cursor].kind == rowContainer {
+		if m.confirm == nil && m.cursor >= 0 && m.cursor < len(m.rows) && m.rows[m.cursor].kind == rowContainer {
 			return m, m.execCmd(m.rows[m.cursor].container.ID)
 		}
 	case "s":
-		if m.cursor >= 0 && m.cursor < len(m.rows) && m.rows[m.cursor].kind == rowContainer {
+		if m.confirm == nil && m.cursor >= 0 && m.cursor < len(m.rows) && m.rows[m.cursor].kind == rowContainer {
 			return m, m.containerOpCmd(opStop, m.rows[m.cursor].container.ID)
 		}
 	case "S":
-		if m.cursor >= 0 && m.cursor < len(m.rows) && m.rows[m.cursor].kind == rowContainer {
+		if m.confirm == nil && m.cursor >= 0 && m.cursor < len(m.rows) && m.rows[m.cursor].kind == rowContainer {
 			return m, m.containerOpCmd(opStart, m.rows[m.cursor].container.ID)
 		}
 	case "r":
-		if m.cursor >= 0 && m.cursor < len(m.rows) && m.rows[m.cursor].kind == rowContainer {
+		if m.confirm == nil && m.cursor >= 0 && m.cursor < len(m.rows) && m.rows[m.cursor].kind == rowContainer {
 			return m, m.containerOpCmd(opRestart, m.rows[m.cursor].container.ID)
 		}
 	case "K":
-		if m.cursor >= 0 && m.cursor < len(m.rows) && m.rows[m.cursor].kind == rowContainer {
+		if m.confirm == nil && m.cursor >= 0 && m.cursor < len(m.rows) && m.rows[m.cursor].kind == rowContainer {
 			return m, m.containerOpCmd(opKill, m.rows[m.cursor].container.ID)
 		}
 	case "p":
-		if m.cursor >= 0 && m.cursor < len(m.rows) && m.rows[m.cursor].kind == rowContainer {
+		if m.confirm == nil && m.cursor >= 0 && m.cursor < len(m.rows) && m.rows[m.cursor].kind == rowContainer {
 			container := m.rows[m.cursor].container
 			op := opPause
 			if container.State == "paused" {
 				op = opUnpause
 			}
 			return m, m.containerOpCmd(op, container.ID)
+		}
+	case "d":
+		if m.confirm == nil && m.cursor >= 0 && m.cursor < len(m.rows) && m.rows[m.cursor].kind == rowContainer {
+			container := m.rows[m.cursor].container
+			m.confirm = &pendingDelete{kind: deleteContainer, id: container.ID, label: container.Name}
+		}
+	case "y":
+		if m.confirm != nil {
+			return m.applyConfirm()
+		}
+	case "n", "esc":
+		if m.confirm != nil {
+			m.confirm = nil
 		}
 	}
 	return m, nil
@@ -436,6 +451,8 @@ func (m Model) applyConfirm() (Model, tea.Cmd) {
 			_, err = resources.VolumeRemove(context.Background(), id, client.VolumeRemoveOptions{})
 		case deleteNetwork:
 			_, err = resources.NetworkRemove(context.Background(), id, client.NetworkRemoveOptions{})
+		case deleteContainer:
+			_, err = resources.ContainerRemove(context.Background(), id, client.ContainerRemoveOptions{})
 		}
 		if err != nil {
 			return watcherErrMsg{err: err}
@@ -604,8 +621,10 @@ func (m Model) View() string {
 			}
 		}
 		footer = resourceFooter(m.confirm, hint)
+	} else if m.confirm != nil {
+		footer = resourceFooter(m.confirm, "")
 	} else {
-		footer = " j/k move  tab focus  e exec  s/S stop/start  r restart  p pause  K kill  left/right tab  q quit"
+		footer = " j/k move  tab focus  e exec  s/S stop/start  r restart  p pause  K kill  d delete  left/right tab  q quit"
 	}
 
 	return header + "\n" + titles + "\n" +

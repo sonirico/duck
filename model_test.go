@@ -81,6 +81,11 @@ func (c *testResourceClient) ContainerUnpause(ctx context.Context, containerID s
 	return client.ContainerUnpauseResult{}, c.containerOpErr
 }
 
+func (c *testResourceClient) ContainerRemove(ctx context.Context, containerID string, options client.ContainerRemoveOptions) (client.ContainerRemoveResult, error) {
+	c.calls = append(c.calls, testResourceCall{method: "remove", id: containerID})
+	return client.ContainerRemoveResult{}, c.containerOpErr
+}
+
 func newTestModel(streamer logRetargeter, resources resourceClient) Model {
 	return NewModel(streamer, TmuxInfo{}, resources)
 }
@@ -495,6 +500,96 @@ func TestContainerOpKeys(t *testing.T) {
 
 		require.NotNil(t, cmd)
 		assert.Equal(t, watcherErrMsg{err: wantErr}, cmd())
+	})
+
+	t.Run("d arms confirm for a container row", func(t *testing.T) {
+		t.Parallel()
+
+		resources := newTestResourceClient(nil)
+		m := newTestModel(newTestLogRetargeter(), resources)
+		m.tab = tabContainers
+		m.focus = focusList
+		m.rows = []row{{kind: rowContainer, key: "id:c1", container: Container{ID: "c1", Name: "web"}}}
+		m.cursor = 0
+
+		got, cmd := m.updateKeys(newTestKeyMsg("d"))
+
+		assert.Equal(t, &pendingDelete{kind: deleteContainer, id: "c1", label: "web"}, got.(Model).confirm)
+		assert.Nil(t, cmd)
+	})
+
+	t.Run("d over a stack row arms nothing", func(t *testing.T) {
+		t.Parallel()
+
+		resources := newTestResourceClient(nil)
+		m := newTestModel(newTestLogRetargeter(), resources)
+		m.tab = tabContainers
+		m.focus = focusList
+		m.rows = []row{{kind: rowStack, key: "stack:app"}}
+		m.cursor = 0
+
+		got, cmd := m.updateKeys(newTestKeyMsg("d"))
+
+		assert.Nil(t, got.(Model).confirm)
+		assert.Nil(t, cmd)
+	})
+
+	t.Run("y with a pending confirm calls ContainerRemove with the id", func(t *testing.T) {
+		t.Parallel()
+
+		resources := newTestResourceClient(nil)
+		m := newTestModel(newTestLogRetargeter(), resources)
+		m.tab = tabContainers
+		m.focus = focusList
+		m.confirm = &pendingDelete{kind: deleteContainer, id: "c1", label: "web"}
+
+		got, cmd := m.updateKeys(newTestKeyMsg("y"))
+
+		assert.Nil(t, got.(Model).confirm)
+		require.NotNil(t, cmd)
+		assert.Nil(t, cmd())
+		require.Len(t, resources.calls, 1)
+		assert.Equal(t, testResourceCall{method: "remove", id: "c1"}, resources.calls[0])
+	})
+
+	t.Run("n and esc clear a pending confirm without calling ContainerRemove", func(t *testing.T) {
+		t.Parallel()
+
+		for _, key := range []string{"n", "esc"} {
+			t.Run(key, func(t *testing.T) {
+				t.Parallel()
+
+				resources := newTestResourceClient(nil)
+				m := newTestModel(newTestLogRetargeter(), resources)
+				m.tab = tabContainers
+				m.focus = focusList
+				m.confirm = &pendingDelete{kind: deleteContainer, id: "c1", label: "web"}
+
+				got, cmd := m.updateKeys(newTestKeyMsg(key))
+
+				assert.Nil(t, got.(Model).confirm)
+				assert.Nil(t, cmd)
+				assert.Empty(t, resources.calls)
+			})
+		}
+	})
+
+	t.Run("s with a pending confirm does nothing", func(t *testing.T) {
+		t.Parallel()
+
+		resources := newTestResourceClient(nil)
+		m := newTestModel(newTestLogRetargeter(), resources)
+		m.tab = tabContainers
+		m.focus = focusList
+		m.rows = []row{{kind: rowContainer, key: "id:c1", container: Container{ID: "c1", State: "running"}}}
+		m.cursor = 0
+		m.confirm = &pendingDelete{kind: deleteContainer, id: "c1", label: "web"}
+
+		got, cmd := m.updateKeys(newTestKeyMsg("s"))
+
+		assert.Equal(t, &pendingDelete{kind: deleteContainer, id: "c1", label: "web"}, got.(Model).confirm)
+		assert.Nil(t, cmd)
+		assert.Empty(t, resources.calls)
 	})
 }
 
@@ -1028,7 +1123,7 @@ func TestViewResourceFooter(t *testing.T) {
 
 		gotView := m.View()
 
-		require.Contains(t, gotView, "j/k move  tab focus  e exec  s/S stop/start  r restart  p pause  K kill  left/right tab  q quit")
+		require.Contains(t, gotView, "j/k move  tab focus  e exec  s/S stop/start  r restart  p pause  K kill  d delete  left/right tab  q quit")
 	})
 }
 
