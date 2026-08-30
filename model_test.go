@@ -307,6 +307,65 @@ func TestUpdateKeys(t *testing.T) {
 		assert.Equal(t, 1, got.(Model).netCursor)
 		assert.Nil(t, cmd)
 	})
+
+	t.Run("right moves from containers to volumes tab", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		m.focus = focusList
+		m.tab = tabContainers
+
+		got, cmd := m.updateKeys(newTestKeyMsg("right"))
+
+		gotModel := got.(Model)
+		assert.Equal(t, tabVolumes, gotModel.tab)
+		assert.Nil(t, gotModel.confirm)
+		assert.Nil(t, cmd)
+	})
+
+	t.Run("right wraps from networks back to containers", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		m.focus = focusList
+		m.tab = tabNetworks
+		m.rows = []row{{kind: rowContainer, key: "id:c1"}}
+
+		got, cmd := m.updateKeys(newTestKeyMsg("right"))
+
+		gotModel := got.(Model)
+		assert.Equal(t, tabContainers, gotModel.tab)
+		assert.Nil(t, gotModel.confirm)
+		require.NotNil(t, cmd)
+	})
+
+	t.Run("left wraps from containers back to networks", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		m.focus = focusList
+		m.tab = tabContainers
+
+		got, cmd := m.updateKeys(newTestKeyMsg("left"))
+
+		gotModel := got.(Model)
+		assert.Equal(t, tabNetworks, gotModel.tab)
+		assert.Nil(t, gotModel.confirm)
+		assert.Nil(t, cmd)
+	})
+
+	t.Run("right clears a pending confirm", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		m.focus = focusList
+		m.tab = tabContainers
+		m.confirm = &pendingDelete{kind: deleteVolume, id: "data"}
+
+		got, _ := m.updateKeys(newTestKeyMsg("right"))
+
+		assert.Nil(t, got.(Model).confirm)
+	})
 }
 
 func TestUpdateVolumeKeys(t *testing.T) {
@@ -561,7 +620,7 @@ func TestUpdateVolumeKeys(t *testing.T) {
 func TestResourceFooter(t *testing.T) {
 	t.Parallel()
 
-	const base = " j/k move  1/2/3 tab  d delete  q quit"
+	const base = " j/k move  left/right tab  d delete  q quit"
 
 	tests := []struct {
 		name    string
@@ -596,6 +655,49 @@ func TestResourceFooter(t *testing.T) {
 			got := resourceFooter(tc.confirm, tc.hint)
 
 			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestRenderTabBar(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		tab        tabID
+		wantActive string
+		wantDim    []string
+	}{
+		{
+			name:       "containers tab active",
+			tab:        tabContainers,
+			wantActive: styleSelected.Render(" 1:containers "),
+			wantDim:    []string{styleDim.Render("2:volumes"), styleDim.Render("3:networks")},
+		},
+		{
+			name:       "volumes tab active",
+			tab:        tabVolumes,
+			wantActive: styleSelected.Render(" 2:volumes "),
+			wantDim:    []string{styleDim.Render("1:containers"), styleDim.Render("3:networks")},
+		},
+		{
+			name:       "networks tab active",
+			tab:        tabNetworks,
+			wantActive: styleSelected.Render(" 3:networks "),
+			wantDim:    []string{styleDim.Render("1:containers"), styleDim.Render("2:volumes")},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := renderTabBar(tc.tab)
+
+			assert.Contains(t, got, tc.wantActive)
+			for _, dim := range tc.wantDim {
+				assert.Contains(t, got, dim)
+			}
 		})
 	}
 }

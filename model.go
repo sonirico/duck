@@ -240,6 +240,20 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.tab = tabNetworks
 			m.confirm = nil
 			return m, nil
+		case "right":
+			m.tab = (m.tab + 1) % 3
+			m.confirm = nil
+			if m.tab == tabContainers {
+				return m, m.retarget()
+			}
+			return m, nil
+		case "left":
+			m.tab = (m.tab + 2) % 3
+			m.confirm = nil
+			if m.tab == tabContainers {
+				return m, m.retarget()
+			}
+			return m, nil
 		}
 	}
 
@@ -489,7 +503,7 @@ func (m Model) View() string {
 	left := m.paneStyle(focusList).Width(m.listWidth()).Height(m.panesHeight()).Render(list)
 	right := m.paneStyle(focusLogs).Width(m.logsWidth()).Height(m.panesHeight()).Render(rightContent)
 
-	header := styleHeader.Render(fmt.Sprintf(" duck  %d containers", len(m.containers)))
+	header := styleHeader.Render(" duck ") + " " + renderTabBar(m.tab) + "  " + styleDim.Render(fmt.Sprintf("%d containers", len(m.containers)))
 	if m.err != nil {
 		header += "  " + styleErr.Render("error: "+m.err.Error())
 	}
@@ -524,11 +538,24 @@ func (m Model) View() string {
 		}
 		footer = resourceFooter(m.confirm, hint)
 	} else {
-		footer = " j/k move  g/G top/bottom  tab focus  e exec  1/2/3 tab  q quit"
+		footer = " j/k move  g/G top/bottom  tab focus  e exec  left/right tab  q quit"
 	}
 
 	return header + "\n" + titles + "\n" +
 		lipgloss.JoinHorizontal(lipgloss.Top, left, right) + "\n" + styleDim.Render(footer)
+}
+
+func renderTabBar(tab tabID) string {
+	labels := []string{"1:containers", "2:volumes", "3:networks"}
+	parts := make([]string, len(labels))
+	for i, label := range labels {
+		if tabID(i) == tab {
+			parts[i] = styleSelected.Render(" " + label + " ")
+		} else {
+			parts[i] = styleDim.Render(label)
+		}
+	}
+	return strings.Join(parts, "  ")
 }
 
 func (m Model) renderList() string {
@@ -567,7 +594,7 @@ func (m Model) renderList() string {
 }
 
 func resourceFooter(confirm *pendingDelete, hint string) string {
-	footer := " j/k move  1/2/3 tab  d delete  q quit"
+	footer := " j/k move  left/right tab  d delete  q quit"
 	if confirm != nil {
 		footer += "  delete " + confirm.label + "? y/n"
 	} else if hint != "" {
