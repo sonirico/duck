@@ -467,6 +467,22 @@ func TestContainerOpKeys(t *testing.T) {
 		})
 	}
 
+	t.Run("e execs into the container and returns a command", func(t *testing.T) {
+		t.Parallel()
+
+		resources := newTestResourceClient(nil)
+		m := newTestModel(newTestLogRetargeter(), resources)
+		m.tab = tabContainers
+		m.focus = focusList
+		m.rows = []row{{kind: rowContainer, key: "id:c1", container: Container{ID: "c1", State: "running"}}}
+		m.cursor = 0
+
+		_, cmd := m.updateKeys(newTestKeyMsg("e"))
+
+		require.NotNil(t, cmd)
+		assert.Empty(t, resources.calls)
+	})
+
 	t.Run("keys are a no-op over a stack row", func(t *testing.T) {
 		t.Parallel()
 
@@ -1124,6 +1140,20 @@ func TestViewResourceFooter(t *testing.T) {
 		gotView := m.View()
 
 		require.Contains(t, gotView, "j/k move  tab focus  e exec  s/S stop/start  r restart  p pause  K kill  d delete  left/right tab  q quit")
+	})
+
+	t.Run("containers tab shows the confirm prompt", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+		m = got.(Model)
+		m.tab = tabContainers
+		m.confirm = &pendingDelete{kind: deleteContainer, id: "c1", label: "web"}
+
+		gotView := m.View()
+
+		require.Contains(t, gotView, "? y/n")
 	})
 }
 
