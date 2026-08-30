@@ -3120,7 +3120,19 @@ func TestSubtabs(t *testing.T) {
 		assert.Contains(t, gotView, `"Name"`)
 	})
 
-	t.Run("subStats renders the container detail", func(t *testing.T) {
+	t.Run("subStats over a stopped container shows container not running", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestSubtabModel(t)
+		m.rows = []row{{kind: rowContainer, key: "id:c1", container: Container{ID: "c1", Name: "web", State: "exited"}}}
+		m.cursor = 0
+		m.subtab = subStats
+		m.syncSubVP()
+
+		assert.Contains(t, m.View(), "container not running")
+	})
+
+	t.Run("subStats without a sample shows sampling, then a statsMsg fills in cpu", func(t *testing.T) {
 		t.Parallel()
 
 		m := newTestSubtabModel(t)
@@ -3129,7 +3141,57 @@ func TestSubtabs(t *testing.T) {
 		m.subtab = subStats
 		m.syncSubVP()
 
-		assert.Contains(t, m.View(), "web")
+		assert.Contains(t, m.View(), "sampling...")
+
+		got, _ := m.Update(statsMsg{stats: []ContainerStat{{ID: "c1", CPUPercent: 12.5, MemUsage: 1e6, MemLimit: 2e6}}})
+
+		assert.Contains(t, got.(Model).View(), "cpu")
+	})
+
+	t.Run("entering subStats over a running container starts the tick loop", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestSubtabModel(t)
+		m.rows = []row{{kind: rowContainer, key: "id:c1", container: Container{ID: "c1", State: "running"}}}
+		m.cursor = 0
+		m.subtab = subTop
+
+		got, cmd := m.updateKeys(newTestKeyMsg("]"))
+		m = got.(Model)
+
+		assert.Equal(t, subStats, m.subtab)
+		assert.True(t, m.statsTicking)
+		assert.NotNil(t, cmd)
+	})
+
+	t.Run("statsTickMsg with subStats active over a running container returns a non-nil cmd", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestSubtabModel(t)
+		m.rows = []row{{kind: rowContainer, key: "id:c1", container: Container{ID: "c1", State: "running"}}}
+		m.cursor = 0
+		m.subtab = subStats
+		m.statsTicking = true
+
+		got, cmd := m.Update(statsTickMsg{})
+
+		assert.True(t, got.(Model).statsTicking)
+		assert.NotNil(t, cmd)
+	})
+
+	t.Run("statsTickMsg after leaving subStats turns off statsTicking and returns a nil cmd", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestSubtabModel(t)
+		m.rows = []row{{kind: rowContainer, key: "id:c1", container: Container{ID: "c1", State: "running"}}}
+		m.cursor = 0
+		m.subtab = subInfo
+		m.statsTicking = true
+
+		got, cmd := m.Update(statsTickMsg{})
+
+		assert.False(t, got.(Model).statsTicking)
+		assert.Nil(t, cmd)
 	})
 
 	t.Run("entering subEnv without a cached extra dispatches a fetch cmd", func(t *testing.T) {

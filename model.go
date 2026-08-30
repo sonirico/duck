@@ -232,10 +232,11 @@ type Model struct {
 	compose   string
 	composeVP viewport.Model
 
-	subtab subtabID
-	subVP  viewport.Model
-	stats  map[string]ContainerStat
-	extras map[string]detailExtra
+	subtab       subtabID
+	subVP        viewport.Model
+	stats        map[string]ContainerStat
+	extras       map[string]detailExtra
+	statsTicking bool
 
 	width  int
 	height int
@@ -318,6 +319,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.stats[s.ID] = s
 		}
 		m.syncSubVP()
+		return m, nil
+
+	case statsTickMsg:
+		if m.cursor >= 0 && m.cursor < len(m.rows) && m.tab == tabContainers && m.subtab == subStats {
+			r := m.rows[m.cursor]
+			if r.kind == rowContainer && r.container.State == "running" {
+				return m, tea.Batch(m.statsCmd([]string{r.container.ID}), statsTickCmd())
+			}
+		}
+		m.statsTicking = false
 		return m, nil
 
 	case detailExtraMsg:
@@ -451,7 +462,7 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			m.subtab = kinds[idx]
 			m.syncSubVP()
-			return m, m.lazyExtraCmd()
+			return m, tea.Batch(m.lazyExtraCmd(), m.statsTickStartCmd())
 		}
 		return m, nil
 	}
@@ -544,28 +555,28 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.cursor++
 			m.clampSubtab()
 			m.syncSubVP()
-			return m, tea.Batch(m.retarget(), m.lazyExtraCmd())
+			return m, tea.Batch(m.retarget(), m.lazyExtraCmd(), m.statsTickStartCmd())
 		}
 	case "k", "up":
 		if m.cursor > 0 {
 			m.cursor--
 			m.clampSubtab()
 			m.syncSubVP()
-			return m, tea.Batch(m.retarget(), m.lazyExtraCmd())
+			return m, tea.Batch(m.retarget(), m.lazyExtraCmd(), m.statsTickStartCmd())
 		}
 	case "g":
 		if len(m.rows) > 0 && m.cursor != 0 {
 			m.cursor = 0
 			m.clampSubtab()
 			m.syncSubVP()
-			return m, tea.Batch(m.retarget(), m.lazyExtraCmd())
+			return m, tea.Batch(m.retarget(), m.lazyExtraCmd(), m.statsTickStartCmd())
 		}
 	case "G":
 		if len(m.rows) > 0 && m.cursor != len(m.rows)-1 {
 			m.cursor = len(m.rows) - 1
 			m.clampSubtab()
 			m.syncSubVP()
-			return m, tea.Batch(m.retarget(), m.lazyExtraCmd())
+			return m, tea.Batch(m.retarget(), m.lazyExtraCmd(), m.statsTickStartCmd())
 		}
 	case "enter":
 		if m.confirm == nil && m.cursor >= 0 && m.cursor < len(m.rows) {
@@ -1066,11 +1077,27 @@ func (m *Model) syncSubVP() {
 	case subTop:
 		m.subVP.SetContent(m.renderTopDetail(r.container))
 	case subStats:
-		m.subVP.SetContent(m.renderContainerDetail(r.container))
+		m.subVP.SetContent(m.renderStatsDetail(r.container))
 	case subInspect:
 		m.subVP.SetContent(m.renderInspectDetail(r.container))
 	case subLogs:
 	}
+}
+
+func (m *Model) statsTickStartCmd() tea.Cmd {
+	if m.cursor < 0 || m.cursor >= len(m.rows) {
+		return nil
+	}
+	r := m.rows[m.cursor]
+	if m.subtab != subStats || r.kind != rowContainer || r.container.State != "running" {
+		return nil
+	}
+	cmd := m.statsCmd([]string{r.container.ID})
+	if m.statsTicking {
+		return cmd
+	}
+	m.statsTicking = true
+	return tea.Batch(cmd, statsTickCmd())
 }
 
 func (m Model) lazyExtraCmd() tea.Cmd {
@@ -1462,6 +1489,24 @@ func (m Model) renderTopDetail(c Container) string {
 	for _, proc := range extra.procs {
 		b.WriteString(writeRow(proc) + "\n")
 	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func (m Model) renderStatsDetail(c Container) string {
+	var b strings.Builder
+	b.WriteString(styleSection.Render("STATS") + "\n")
+
+	if c.State != "running" {
+		b.WriteString(styleDim.Render("container not running"))
+		return b.String()
+	}
+	s, ok := m.stats[c.ID]
+	if !ok {
+		b.WriteString(styleDim.Render("sampling..."))
+		return b.String()
+	}
+	b.WriteString(renderKV("cpu:", fmt.Sprintf("%.1f%%", s.CPUPercent)) + "\n")
+	b.WriteString(renderKV("mem:", formatMemBytes(s.MemUsage)+" / "+formatMemBytes(s.MemLimit)))
 	return strings.TrimRight(b.String(), "\n")
 }
 
