@@ -3120,6 +3120,18 @@ func TestSubtabs(t *testing.T) {
 		assert.Contains(t, gotView, `"Name"`)
 	})
 
+	t.Run("subStats renders the container detail", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestSubtabModel(t)
+		m.rows = []row{{kind: rowContainer, key: "id:c1", container: Container{ID: "c1", Name: "web", State: "running"}}}
+		m.cursor = 0
+		m.subtab = subStats
+		m.syncSubVP()
+
+		assert.Contains(t, m.View(), "web")
+	})
+
 	t.Run("entering subEnv without a cached extra dispatches a fetch cmd", func(t *testing.T) {
 		t.Parallel()
 
