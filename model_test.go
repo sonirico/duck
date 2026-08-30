@@ -2485,6 +2485,27 @@ func TestDetailView(t *testing.T) {
 		assert.Contains(t, detail, "project: standalone")
 	})
 
+	t.Run("statsMsg for a stack row's detail includes per-container cpu and mem", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+		m = got.(Model)
+		m.tab = tabContainers
+		m.focus = focusList
+		m.containers = []Container{{ID: "c1", Name: "app_web_1", Project: "app", Service: "web", State: "running"}}
+		m.rows = []row{{kind: rowStack, key: "stack:app", project: "app"}}
+		m.cursor = 0
+
+		gotModel, _ := m.updateKeys(newTestKeyMsg("enter"))
+		m = gotModel.(Model)
+		gotModel, _ = m.Update(statsMsg{stats: []ContainerStat{{ID: "c1", CPUPercent: 12.3, MemUsage: 1024, MemLimit: 4096}}})
+
+		detail := gotModel.(Model).detail
+		assert.Contains(t, detail, "cpu 12.3%")
+		assert.Contains(t, detail, "mem "+formatMemBytes(1024))
+	})
+
 	t.Run("detail active shows the detail title and scroll footer, esc returns to logs", func(t *testing.T) {
 		t.Parallel()
 
@@ -2723,6 +2744,73 @@ func (c *testResourceClientWithInspectErr) ImageInspect(ctx context.Context, ima
 		return client.ImageInspectResult{}, c.imageInspectErr
 	}
 	return client.ImageInspectResult{}, nil
+}
+
+// testCloseErrReader wraps a string body but returns a caller-supplied error
+// from Close, for exercising statsCmd's close-error branch.
+type testCloseErrReader struct {
+	io.Reader
+	closeErr error
+}
+
+func newTestCloseErrReader(body string, closeErr error) *testCloseErrReader {
+	return &testCloseErrReader{Reader: strings.NewReader(body), closeErr: closeErr}
+}
+
+func (r *testCloseErrReader) Close() error { return r.closeErr }
+
+func TestStatsCmd(t *testing.T) {
+	t.Parallel()
+
+	t.Run("ContainerStats error returns watcherErrMsg", func(t *testing.T) {
+		t.Parallel()
+
+		wantErr := errors.New("stats boom")
+		resources := newTestResourceClient(nil)
+		resources.containerStats = func(ctx context.Context, containerID string, options client.ContainerStatsOptions) (client.ContainerStatsResult, error) {
+			return client.ContainerStatsResult{}, wantErr
+		}
+		m := newTestModel(newTestLogRetargeter(), resources)
+
+		cmd := m.statsCmd([]string{"c1"})
+
+		require.NotNil(t, cmd)
+		assert.Equal(t, watcherErrMsg{err: wantErr}, cmd())
+	})
+
+	t.Run("decode error returns watcherErrMsg", func(t *testing.T) {
+		t.Parallel()
+
+		resources := newTestResourceClient(nil)
+		resources.containerStats = func(ctx context.Context, containerID string, options client.ContainerStatsOptions) (client.ContainerStatsResult, error) {
+			return client.ContainerStatsResult{Body: io.NopCloser(strings.NewReader("not json"))}, nil
+		}
+		m := newTestModel(newTestLogRetargeter(), resources)
+
+		cmd := m.statsCmd([]string{"c1"})
+
+		require.NotNil(t, cmd)
+		got, ok := cmd().(watcherErrMsg)
+		require.True(t, ok)
+		assert.Error(t, got.err)
+	})
+
+	t.Run("body close error returns watcherErrMsg", func(t *testing.T) {
+		t.Parallel()
+
+		statsJSON := `{"cpu_stats":{"cpu_usage":{"total_usage":150},"system_cpu_usage":2000,"online_cpus":4},"precpu_stats":{"cpu_usage":{"total_usage":100},"system_cpu_usage":1000},"memory_stats":{"usage":1024,"limit":4096}}`
+		wantErr := errors.New("close boom")
+		resources := newTestResourceClient(nil)
+		resources.containerStats = func(ctx context.Context, containerID string, options client.ContainerStatsOptions) (client.ContainerStatsResult, error) {
+			return client.ContainerStatsResult{Body: newTestCloseErrReader(statsJSON, wantErr)}, nil
+		}
+		m := newTestModel(newTestLogRetargeter(), resources)
+
+		cmd := m.statsCmd([]string{"c1"})
+
+		require.NotNil(t, cmd)
+		assert.Equal(t, watcherErrMsg{err: wantErr}, cmd())
+	})
 }
 
 func (c *testResourceClientWithInspectErr) ContainerStats(ctx context.Context, containerID string, options client.ContainerStatsOptions) (client.ContainerStatsResult, error) {
