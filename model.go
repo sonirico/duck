@@ -82,6 +82,17 @@ type pendingDelete struct {
 	label string
 }
 
+type containerOp int
+
+const (
+	opStart containerOp = iota
+	opStop
+	opRestart
+	opKill
+	opPause
+	opUnpause
+)
+
 type logLine struct {
 	source string
 	line   string
@@ -96,6 +107,12 @@ type logRetargeter interface {
 type resourceClient interface {
 	VolumeRemove(ctx context.Context, volumeID string, options client.VolumeRemoveOptions) (client.VolumeRemoveResult, error)
 	NetworkRemove(ctx context.Context, networkID string, options client.NetworkRemoveOptions) (client.NetworkRemoveResult, error)
+	ContainerStart(ctx context.Context, containerID string, options client.ContainerStartOptions) (client.ContainerStartResult, error)
+	ContainerStop(ctx context.Context, containerID string, options client.ContainerStopOptions) (client.ContainerStopResult, error)
+	ContainerRestart(ctx context.Context, containerID string, options client.ContainerRestartOptions) (client.ContainerRestartResult, error)
+	ContainerKill(ctx context.Context, containerID string, options client.ContainerKillOptions) (client.ContainerKillResult, error)
+	ContainerPause(ctx context.Context, containerID string, options client.ContainerPauseOptions) (client.ContainerPauseResult, error)
+	ContainerUnpause(ctx context.Context, containerID string, options client.ContainerUnpauseOptions) (client.ContainerUnpauseResult, error)
 }
 
 type Model struct {
@@ -307,6 +324,31 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.cursor >= 0 && m.cursor < len(m.rows) && m.rows[m.cursor].kind == rowContainer {
 			return m, m.execCmd(m.rows[m.cursor].container.ID)
 		}
+	case "s":
+		if m.cursor >= 0 && m.cursor < len(m.rows) && m.rows[m.cursor].kind == rowContainer {
+			return m, m.containerOpCmd(opStop, m.rows[m.cursor].container.ID)
+		}
+	case "S":
+		if m.cursor >= 0 && m.cursor < len(m.rows) && m.rows[m.cursor].kind == rowContainer {
+			return m, m.containerOpCmd(opStart, m.rows[m.cursor].container.ID)
+		}
+	case "r":
+		if m.cursor >= 0 && m.cursor < len(m.rows) && m.rows[m.cursor].kind == rowContainer {
+			return m, m.containerOpCmd(opRestart, m.rows[m.cursor].container.ID)
+		}
+	case "K":
+		if m.cursor >= 0 && m.cursor < len(m.rows) && m.rows[m.cursor].kind == rowContainer {
+			return m, m.containerOpCmd(opKill, m.rows[m.cursor].container.ID)
+		}
+	case "p":
+		if m.cursor >= 0 && m.cursor < len(m.rows) && m.rows[m.cursor].kind == rowContainer {
+			container := m.rows[m.cursor].container
+			op := opPause
+			if container.State == "paused" {
+				op = opUnpause
+			}
+			return m, m.containerOpCmd(op, container.ID)
+		}
 	}
 	return m, nil
 }
@@ -394,6 +436,31 @@ func (m Model) applyConfirm() (Model, tea.Cmd) {
 			_, err = resources.VolumeRemove(context.Background(), id, client.VolumeRemoveOptions{})
 		case deleteNetwork:
 			_, err = resources.NetworkRemove(context.Background(), id, client.NetworkRemoveOptions{})
+		}
+		if err != nil {
+			return watcherErrMsg{err: err}
+		}
+		return nil
+	}
+}
+
+func (m Model) containerOpCmd(op containerOp, id string) tea.Cmd {
+	resources := m.resources
+	return func() tea.Msg {
+		var err error
+		switch op {
+		case opStart:
+			_, err = resources.ContainerStart(context.Background(), id, client.ContainerStartOptions{})
+		case opStop:
+			_, err = resources.ContainerStop(context.Background(), id, client.ContainerStopOptions{})
+		case opRestart:
+			_, err = resources.ContainerRestart(context.Background(), id, client.ContainerRestartOptions{})
+		case opKill:
+			_, err = resources.ContainerKill(context.Background(), id, client.ContainerKillOptions{})
+		case opPause:
+			_, err = resources.ContainerPause(context.Background(), id, client.ContainerPauseOptions{})
+		case opUnpause:
+			_, err = resources.ContainerUnpause(context.Background(), id, client.ContainerUnpauseOptions{})
 		}
 		if err != nil {
 			return watcherErrMsg{err: err}
@@ -538,7 +605,7 @@ func (m Model) View() string {
 		}
 		footer = resourceFooter(m.confirm, hint)
 	} else {
-		footer = " j/k move  g/G top/bottom  tab focus  e exec  left/right tab  q quit"
+		footer = " j/k move  tab focus  e exec  s/S stop/start  r restart  p pause  K kill  left/right tab  q quit"
 	}
 
 	return header + "\n" + titles + "\n" +

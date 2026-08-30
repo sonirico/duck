@@ -21,9 +21,15 @@ func newTestLogRetargeter() *testLogRetargeter { return &testLogRetargeter{} }
 
 func (s *testLogRetargeter) SetTargets(ts []LogTarget) { s.targets = ts }
 
+type testResourceCall struct {
+	method string
+	id     string
+}
+
 type testResourceClient struct {
 	volumeRemove  func(ctx context.Context, volumeID string, options client.VolumeRemoveOptions) (client.VolumeRemoveResult, error)
 	networkRemove func(ctx context.Context, networkID string, options client.NetworkRemoveOptions) (client.NetworkRemoveResult, error)
+	calls         []testResourceCall
 }
 
 func newTestResourceClient(
@@ -38,6 +44,36 @@ func (c *testResourceClient) VolumeRemove(ctx context.Context, volumeID string, 
 
 func (c *testResourceClient) NetworkRemove(ctx context.Context, networkID string, options client.NetworkRemoveOptions) (client.NetworkRemoveResult, error) {
 	return c.networkRemove(ctx, networkID, options)
+}
+
+func (c *testResourceClient) ContainerStart(ctx context.Context, containerID string, options client.ContainerStartOptions) (client.ContainerStartResult, error) {
+	c.calls = append(c.calls, testResourceCall{method: "start", id: containerID})
+	return client.ContainerStartResult{}, nil
+}
+
+func (c *testResourceClient) ContainerStop(ctx context.Context, containerID string, options client.ContainerStopOptions) (client.ContainerStopResult, error) {
+	c.calls = append(c.calls, testResourceCall{method: "stop", id: containerID})
+	return client.ContainerStopResult{}, nil
+}
+
+func (c *testResourceClient) ContainerRestart(ctx context.Context, containerID string, options client.ContainerRestartOptions) (client.ContainerRestartResult, error) {
+	c.calls = append(c.calls, testResourceCall{method: "restart", id: containerID})
+	return client.ContainerRestartResult{}, nil
+}
+
+func (c *testResourceClient) ContainerKill(ctx context.Context, containerID string, options client.ContainerKillOptions) (client.ContainerKillResult, error) {
+	c.calls = append(c.calls, testResourceCall{method: "kill", id: containerID})
+	return client.ContainerKillResult{}, nil
+}
+
+func (c *testResourceClient) ContainerPause(ctx context.Context, containerID string, options client.ContainerPauseOptions) (client.ContainerPauseResult, error) {
+	c.calls = append(c.calls, testResourceCall{method: "pause", id: containerID})
+	return client.ContainerPauseResult{}, nil
+}
+
+func (c *testResourceClient) ContainerUnpause(ctx context.Context, containerID string, options client.ContainerUnpauseOptions) (client.ContainerUnpauseResult, error) {
+	c.calls = append(c.calls, testResourceCall{method: "unpause", id: containerID})
+	return client.ContainerUnpauseResult{}, nil
 }
 
 func newTestModel(streamer logRetargeter, resources resourceClient) Model {
@@ -381,6 +417,62 @@ func TestUpdateKeys(t *testing.T) {
 		assert.Equal(t, tabContainers, gotModel.tab)
 		assert.Nil(t, gotModel.confirm)
 		require.NotNil(t, cmd)
+	})
+}
+
+func TestContainerOpKeys(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		key        string
+		state      string
+		wantMethod string
+	}{
+		{name: "s stops the container", key: "s", state: "running", wantMethod: "stop"},
+		{name: "S starts the container", key: "S", state: "exited", wantMethod: "start"},
+		{name: "r restarts the container", key: "r", state: "running", wantMethod: "restart"},
+		{name: "K kills the container", key: "K", state: "running", wantMethod: "kill"},
+		{name: "p pauses a running container", key: "p", state: "running", wantMethod: "pause"},
+		{name: "p unpauses a paused container", key: "p", state: "paused", wantMethod: "unpause"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			resources := newTestResourceClient(nil)
+			m := newTestModel(newTestLogRetargeter(), resources)
+			m.tab = tabContainers
+			m.focus = focusList
+			m.rows = []row{{kind: rowContainer, key: "id:c1", container: Container{ID: "c1", State: tc.state}}}
+			m.cursor = 0
+
+			_, cmd := m.updateKeys(newTestKeyMsg(tc.key))
+
+			require.NotNil(t, cmd)
+			assert.Nil(t, cmd())
+			require.Len(t, resources.calls, 1)
+			assert.Equal(t, testResourceCall{method: tc.wantMethod, id: "c1"}, resources.calls[0])
+		})
+	}
+
+	t.Run("keys are a no-op over a stack row", func(t *testing.T) {
+		t.Parallel()
+
+		resources := newTestResourceClient(nil)
+		m := newTestModel(newTestLogRetargeter(), resources)
+		m.tab = tabContainers
+		m.focus = focusList
+		m.rows = []row{{kind: rowStack, key: "stack:app"}}
+		m.cursor = 0
+
+		for _, key := range []string{"s", "S", "r", "K", "p"} {
+			got, cmd := m.updateKeys(newTestKeyMsg(key))
+			assert.Nil(t, cmd)
+			m = got.(Model)
+		}
+		assert.Empty(t, resources.calls)
 	})
 }
 
@@ -914,7 +1006,7 @@ func TestViewResourceFooter(t *testing.T) {
 
 		gotView := m.View()
 
-		require.Contains(t, gotView, "j/k move  g/G top/bottom  tab focus  e exec  left/right tab  q quit")
+		require.Contains(t, gotView, "j/k move  tab focus  e exec  s/S stop/start  r restart  p pause  K kill  left/right tab  q quit")
 	})
 }
 
