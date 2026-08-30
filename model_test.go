@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -27,16 +28,30 @@ type testResourceCall struct {
 }
 
 type testResourceClient struct {
-	volumeRemove   func(ctx context.Context, volumeID string, options client.VolumeRemoveOptions) (client.VolumeRemoveResult, error)
-	networkRemove  func(ctx context.Context, networkID string, options client.NetworkRemoveOptions) (client.NetworkRemoveResult, error)
-	containerOpErr error
-	calls          []testResourceCall
+	volumeRemove     func(ctx context.Context, volumeID string, options client.VolumeRemoveOptions) (client.VolumeRemoveResult, error)
+	networkRemove    func(ctx context.Context, networkID string, options client.NetworkRemoveOptions) (client.NetworkRemoveResult, error)
+	containerOpErr   error
+	containerInspect client.ContainerInspectResult
+	imageInspect     client.ImageInspectResult
+	calls            []testResourceCall
 }
 
 func newTestResourceClient(
 	volumeRemove func(ctx context.Context, volumeID string, options client.VolumeRemoveOptions) (client.VolumeRemoveResult, error),
 ) *testResourceClient {
-	return &testResourceClient{volumeRemove: volumeRemove}
+	return &testResourceClient{
+		volumeRemove: volumeRemove,
+		containerInspect: client.ContainerInspectResult{
+			Container: container.InspectResponse{
+				Name: "/web",
+				Config: &container.Config{
+					Image:  "nginx:latest",
+					Labels: map[string]string{"com.docker.compose.service": "web"},
+				},
+			},
+		},
+		imageInspect: client.ImageInspectResult{},
+	}
 }
 
 func newTestResourceClientWithContainerOpErr(err error) *testResourceClient {
@@ -84,6 +99,16 @@ func (c *testResourceClient) ContainerUnpause(ctx context.Context, containerID s
 func (c *testResourceClient) ContainerRemove(ctx context.Context, containerID string, options client.ContainerRemoveOptions) (client.ContainerRemoveResult, error) {
 	c.calls = append(c.calls, testResourceCall{method: "remove", id: containerID})
 	return client.ContainerRemoveResult{}, c.containerOpErr
+}
+
+func (c *testResourceClient) ContainerInspect(ctx context.Context, containerID string, options client.ContainerInspectOptions) (client.ContainerInspectResult, error) {
+	c.calls = append(c.calls, testResourceCall{method: "inspect", id: containerID})
+	return c.containerInspect, nil
+}
+
+func (c *testResourceClient) ImageInspect(ctx context.Context, imageID string, inspectOpts ...client.ImageInspectOption) (client.ImageInspectResult, error) {
+	c.calls = append(c.calls, testResourceCall{method: "image-inspect", id: imageID})
+	return c.imageInspect, nil
 }
 
 func newTestModel(streamer logRetargeter, resources resourceClient) Model {
@@ -1372,5 +1397,78 @@ func TestUpdateNetworkKeys(t *testing.T) {
 		require.NotNil(t, cmd)
 		assert.Nil(t, cmd())
 		assert.Equal(t, "n1", gotID)
+	})
+}
+
+func TestComposeKey(t *testing.T) {
+	t.Parallel()
+
+	t.Run("y over a container row produces a composeMsg with the service", func(t *testing.T) {
+		t.Parallel()
+
+		resources := newTestResourceClient(nil)
+		m := newTestModel(newTestLogRetargeter(), resources)
+		m.tab = tabContainers
+		m.focus = focusList
+		m.rows = []row{{kind: rowContainer, key: "id:c1", container: Container{ID: "c1", Name: "web"}}}
+		m.cursor = 0
+
+		_, cmd := m.updateKeys(newTestKeyMsg("y"))
+
+		require.NotNil(t, cmd)
+		got, ok := cmd().(composeMsg)
+		require.True(t, ok)
+		assert.Contains(t, got.yaml, "services:")
+		assert.Contains(t, got.yaml, "web:")
+	})
+
+	t.Run("composeMsg assigns m.compose", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+
+		got, cmd := m.Update(composeMsg{yaml: "services:\n  web:\n"})
+
+		assert.Equal(t, "services:\n  web:\n", got.(Model).compose)
+		assert.Nil(t, cmd)
+	})
+
+	t.Run("compose active shows the compose title and esc clears it", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+		m = got.(Model)
+		m.tab = tabContainers
+		m.compose = "services:\n  web:\n"
+		m.composeVP.SetContent(m.compose)
+
+		gotView := m.View()
+
+		assert.Contains(t, gotView, " compose")
+
+		got, cmd := m.updateKeys(newTestKeyMsg("esc"))
+
+		assert.Equal(t, "", got.(Model).compose)
+		assert.Nil(t, cmd)
+	})
+
+	t.Run("y with a pending confirm does not trigger inspect", func(t *testing.T) {
+		t.Parallel()
+
+		resources := newTestResourceClient(nil)
+		m := newTestModel(newTestLogRetargeter(), resources)
+		m.tab = tabContainers
+		m.focus = focusList
+		m.confirm = &pendingDelete{kind: deleteContainer, id: "c1", label: "web"}
+		m.rows = []row{{kind: rowContainer, key: "id:c1", container: Container{ID: "c1", Name: "web"}}}
+		m.cursor = 0
+
+		_, cmd := m.updateKeys(newTestKeyMsg("y"))
+
+		require.NotNil(t, cmd)
+		assert.Nil(t, cmd())
+		require.Len(t, resources.calls, 1)
+		assert.Equal(t, testResourceCall{method: "remove", id: "c1"}, resources.calls[0])
 	})
 }

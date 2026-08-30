@@ -11,6 +11,8 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/image"
 	"github.com/moby/moby/client"
 )
 
@@ -99,6 +101,10 @@ type logLine struct {
 	line   string
 }
 
+type composeMsg struct {
+	yaml string
+}
+
 type logRetargeter interface {
 	SetTargets(ts []LogTarget)
 }
@@ -115,6 +121,8 @@ type resourceClient interface {
 	ContainerPause(ctx context.Context, containerID string, options client.ContainerPauseOptions) (client.ContainerPauseResult, error)
 	ContainerUnpause(ctx context.Context, containerID string, options client.ContainerUnpauseOptions) (client.ContainerUnpauseResult, error)
 	ContainerRemove(ctx context.Context, containerID string, options client.ContainerRemoveOptions) (client.ContainerRemoveResult, error)
+	ContainerInspect(ctx context.Context, containerID string, options client.ContainerInspectOptions) (client.ContainerInspectResult, error)
+	ImageInspect(ctx context.Context, imageID string, inspectOpts ...client.ImageInspectOption) (client.ImageInspectResult, error)
 }
 
 type Model struct {
@@ -142,6 +150,9 @@ type Model struct {
 	viewport viewport.Model
 	follow   bool
 
+	compose   string
+	composeVP viewport.Model
+
 	width  int
 	height int
 	err    error
@@ -163,6 +174,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport.Width = m.logsWidth()
 		m.viewport.Height = m.panesHeight()
 		m.viewport.SetContent(m.renderLogs())
+		m.composeVP.Width = m.logsWidth()
+		m.composeVP.Height = m.panesHeight()
 		return m, nil
 
 	case containersMsg:
@@ -197,6 +210,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case watcherErrMsg:
 		m.err = msg.err
+		return m, nil
+
+	case composeMsg:
+		m.compose = msg.yaml
+		m.composeVP.SetContent(msg.yaml)
 		return m, nil
 
 	case logResetMsg:
@@ -243,6 +261,16 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.focus = focusList
 		}
 		return m, nil
+	}
+
+	if m.compose != "" {
+		if msg.String() == "esc" {
+			m.compose = ""
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.composeVP, cmd = m.composeVP.Update(msg)
+		return m, cmd
 	}
 
 	if m.focus == focusList {
@@ -360,6 +388,7 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.confirm != nil {
 			return m.applyConfirm()
 		}
+		return m, m.composeCmd()
 	case "n", "esc":
 		if m.confirm != nil {
 			m.confirm = nil
@@ -528,6 +557,51 @@ func (m Model) retarget() tea.Cmd {
 	}
 }
 
+func (m Model) composeCmd() tea.Cmd {
+	if m.cursor < 0 || m.cursor >= len(m.rows) {
+		return nil
+	}
+	r := m.rows[m.cursor]
+	var ids []string
+	switch r.kind {
+	case rowContainer:
+		ids = []string{r.container.ID}
+	case rowStack:
+		for _, c := range m.containers {
+			if c.Project == r.project {
+				ids = append(ids, c.ID)
+			}
+		}
+	}
+	project := r.project
+	resources := m.resources
+	return func() tea.Msg {
+		containers := make([]container.InspectResponse, 0, len(ids))
+		for _, id := range ids {
+			res, err := resources.ContainerInspect(context.Background(), id, client.ContainerInspectOptions{})
+			if err != nil {
+				return watcherErrMsg{err: err}
+			}
+			containers = append(containers, res.Container)
+		}
+
+		images := make(map[string]image.InspectResponse)
+		for _, c := range containers {
+			if _, ok := images[c.Config.Image]; ok {
+				continue
+			}
+			res, err := resources.ImageInspect(context.Background(), c.Config.Image)
+			if err != nil {
+				return watcherErrMsg{err: err}
+			}
+			images[c.Config.Image] = res.InspectResponse
+		}
+
+		f := newComposeFile(containers, images, project)
+		return composeMsg{yaml: f.render()}
+	}
+}
+
 func (m Model) selectedKey() string {
 	if m.cursor < 0 || m.cursor >= len(m.rows) {
 		return ""
@@ -583,6 +657,8 @@ func (m Model) View() string {
 	} else if m.tab == tabNetworks {
 		list = m.renderNetworkList()
 		rightContent = m.renderNetworkDetail()
+	} else if m.compose != "" {
+		rightContent = m.composeVP.View()
 	}
 	left := m.paneStyle(focusList).Width(m.listWidth()).Height(m.panesHeight()).Render(list)
 	right := m.paneStyle(focusLogs).Width(m.logsWidth()).Height(m.panesHeight()).Render(rightContent)
@@ -594,6 +670,9 @@ func (m Model) View() string {
 	title := " logs"
 	if m.logTitle != "" {
 		title = " logs: " + m.logTitle
+	}
+	if m.tab == tabContainers && m.compose != "" {
+		title = " compose"
 	}
 	titles := lipgloss.JoinHorizontal(lipgloss.Top,
 		lipgloss.NewStyle().Width(m.listWidth()+2).Render(styleTitle.Render(" containers")),
@@ -621,6 +700,8 @@ func (m Model) View() string {
 			}
 		}
 		footer = resourceFooter(m.confirm, hint)
+	} else if m.tab == tabContainers && m.compose != "" {
+		footer = " j/k scroll  g/G top/bottom  esc back  q quit"
 	} else if m.confirm != nil {
 		footer = resourceFooter(m.confirm, "")
 	} else {
