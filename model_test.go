@@ -20,7 +20,8 @@ func newTestLogRetargeter() *testLogRetargeter { return &testLogRetargeter{} }
 func (s *testLogRetargeter) SetTargets(ts []LogTarget) { s.targets = ts }
 
 type testResourceClient struct {
-	volumeRemove func(ctx context.Context, volumeID string, options client.VolumeRemoveOptions) (client.VolumeRemoveResult, error)
+	volumeRemove  func(ctx context.Context, volumeID string, options client.VolumeRemoveOptions) (client.VolumeRemoveResult, error)
+	networkRemove func(ctx context.Context, networkID string, options client.NetworkRemoveOptions) (client.NetworkRemoveResult, error)
 }
 
 func newTestResourceClient(
@@ -31,6 +32,10 @@ func newTestResourceClient(
 
 func (c *testResourceClient) VolumeRemove(ctx context.Context, volumeID string, options client.VolumeRemoveOptions) (client.VolumeRemoveResult, error) {
 	return c.volumeRemove(ctx, volumeID, options)
+}
+
+func (c *testResourceClient) NetworkRemove(ctx context.Context, networkID string, options client.NetworkRemoveOptions) (client.NetworkRemoveResult, error) {
+	return c.networkRemove(ctx, networkID, options)
 }
 
 func newTestModel(streamer logRetargeter, resources resourceClient) Model {
@@ -72,6 +77,40 @@ func TestFormatVolumeRow(t *testing.T) {
 			t.Parallel()
 
 			got := formatVolumeRow(tc.vol, tc.used)
+
+			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestFormatNetworkRow(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		net  Network
+		used int
+		want string
+	}{
+		{
+			name: "network with a subnet",
+			net:  Network{Name: "app-net", Driver: "bridge", Subnet: "172.18.0.0/16"},
+			used: 0,
+			want: "app-net  bridge  172.18.0.0/16  used-by:0",
+		},
+		{
+			name: "network without a subnet",
+			net:  Network{Name: "host", Driver: "host"},
+			used: 2,
+			want: "host  host  used-by:2",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := formatNetworkRow(tc.net, tc.used)
 
 			require.Equal(t, tc.want, got)
 		})
@@ -173,6 +212,22 @@ func TestUpdateKeys(t *testing.T) {
 
 		gotModel := got.(Model)
 		assert.Equal(t, tabVolumes, gotModel.tab)
+		assert.Nil(t, gotModel.confirm)
+		assert.Nil(t, cmd)
+	})
+
+	t.Run("3 switches focus-list to the networks tab and resets confirm", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		m.focus = focusList
+		m.tab = tabContainers
+		m.confirm = &pendingDelete{kind: "network", id: "app-net"}
+
+		got, cmd := m.updateKeys(newTestKeyMsg("3"))
+
+		gotModel := got.(Model)
+		assert.Equal(t, tabNetworks, gotModel.tab)
 		assert.Nil(t, gotModel.confirm)
 		assert.Nil(t, cmd)
 	})
@@ -438,5 +493,60 @@ func TestUpdateVolumeKeys(t *testing.T) {
 				assert.Nil(t, cmd)
 			})
 		}
+	})
+}
+
+func TestUpdateNetworkKeys(t *testing.T) {
+	t.Parallel()
+
+	t.Run("d", func(t *testing.T) {
+		t.Parallel()
+
+		t.Run("does nothing for a builtin network", func(t *testing.T) {
+			t.Parallel()
+
+			m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+			m.networks = []Network{{ID: "n1", Name: "bridge", Driver: "bridge"}}
+			m.netCursor = 0
+
+			got, cmd := m.updateNetworkKeys(newTestKeyMsg("d"))
+
+			assert.Nil(t, got.(Model).confirm)
+			assert.Nil(t, cmd)
+		})
+
+		t.Run("arms confirm for an unused, non-builtin network", func(t *testing.T) {
+			t.Parallel()
+
+			m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+			m.networks = []Network{{ID: "n1", Name: "app-net", Driver: "bridge"}}
+			m.netCursor = 0
+
+			got, cmd := m.updateNetworkKeys(newTestKeyMsg("d"))
+
+			gotModel := got.(Model)
+			assert.Equal(t, &pendingDelete{kind: "network", id: "n1", label: "app-net"}, gotModel.confirm)
+			assert.Nil(t, cmd)
+		})
+	})
+
+	t.Run("y removes the network and clears confirm on success", func(t *testing.T) {
+		t.Parallel()
+
+		var gotID string
+		resources := newTestResourceClient(nil)
+		resources.networkRemove = func(ctx context.Context, networkID string, options client.NetworkRemoveOptions) (client.NetworkRemoveResult, error) {
+			gotID = networkID
+			return client.NetworkRemoveResult{}, nil
+		}
+		m := newTestModel(newTestLogRetargeter(), resources)
+		m.confirm = &pendingDelete{kind: "network", id: "n1", label: "app-net"}
+
+		got, cmd := m.updateNetworkKeys(newTestKeyMsg("y"))
+
+		assert.Nil(t, got.(Model).confirm)
+		require.NotNil(t, cmd)
+		assert.Nil(t, cmd())
+		assert.Equal(t, "n1", gotID)
 	})
 }
