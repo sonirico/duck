@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -3139,6 +3140,24 @@ func TestDetailExtraCmd(t *testing.T) {
 		require.NotNil(t, cmd)
 		assert.Equal(t, watcherErrMsg{err: wantErr}, cmd())
 	})
+}
+
+func TestDetailExtraCmdMounts(t *testing.T) {
+	t.Parallel()
+
+	client := newTestResourceClient(nil)
+	client.containerInspect.Container.Mounts = []container.MountPoint{
+		{Type: mount.TypeBind, Source: "/host/path", Destination: "/data"},
+		{Type: mount.TypeVolume, Name: "db-data", Destination: "/var/lib/data"},
+	}
+	m := newTestModel(newTestLogRetargeter(), client)
+
+	cmd := m.detailExtraCmd("c1")
+
+	require.NotNil(t, cmd)
+	got, ok := cmd().(detailExtraMsg)
+	require.True(t, ok)
+	assert.Equal(t, []string{"/host/path -> /data", "db-data -> /var/lib/data"}, got.extra.mounts)
 }
 
 func (c *testResourceClientWithInspectErr) ContainerStats(ctx context.Context, containerID string, options client.ContainerStatsOptions) (client.ContainerStatsResult, error) {
