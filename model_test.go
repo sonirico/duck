@@ -1471,4 +1471,172 @@ func TestComposeKey(t *testing.T) {
 		require.Len(t, resources.calls, 1)
 		assert.Equal(t, testResourceCall{method: "remove", id: "c1"}, resources.calls[0])
 	})
+
+	t.Run("y with an invalid cursor does not produce a command", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		m.tab = tabContainers
+		m.focus = focusList
+		m.rows = nil
+		m.cursor = 0
+
+		_, cmd := m.updateKeys(newTestKeyMsg("y"))
+
+		assert.Nil(t, cmd)
+	})
+
+	t.Run("y over a stack row inspects every container of the project", func(t *testing.T) {
+		t.Parallel()
+
+		resources := newTestResourceClient(nil)
+		m := newTestModel(newTestLogRetargeter(), resources)
+		m.tab = tabContainers
+		m.focus = focusList
+		m.containers = []Container{
+			{ID: "c1", Project: "app"},
+			{ID: "c2", Project: "app"},
+			{ID: "c3", Project: "other"},
+		}
+		m.rows = []row{{kind: rowStack, key: "stack:app", project: "app"}}
+		m.cursor = 0
+
+		_, cmd := m.updateKeys(newTestKeyMsg("y"))
+
+		require.NotNil(t, cmd)
+		got, ok := cmd().(composeMsg)
+		require.True(t, ok)
+		assert.Contains(t, got.yaml, "services:")
+		assert.Contains(t, resources.calls, testResourceCall{method: "inspect", id: "c1"})
+		assert.Contains(t, resources.calls, testResourceCall{method: "inspect", id: "c2"})
+		assert.NotContains(t, resources.calls, testResourceCall{method: "inspect", id: "c3"})
+	})
+
+	t.Run("y returns watcherErrMsg when ContainerInspect fails", func(t *testing.T) {
+		t.Parallel()
+
+		wantErr := errors.New("inspect boom")
+		resources := newTestResourceClientWithContainerInspectErr(wantErr)
+		m := newTestModel(newTestLogRetargeter(), resources)
+		m.tab = tabContainers
+		m.focus = focusList
+		m.rows = []row{{kind: rowContainer, key: "id:c1", container: Container{ID: "c1", Name: "web"}}}
+		m.cursor = 0
+
+		_, cmd := m.updateKeys(newTestKeyMsg("y"))
+
+		require.NotNil(t, cmd)
+		got, ok := cmd().(watcherErrMsg)
+		require.True(t, ok)
+		assert.Equal(t, wantErr, got.err)
+	})
+
+	t.Run("y returns watcherErrMsg when ImageInspect fails", func(t *testing.T) {
+		t.Parallel()
+
+		wantErr := errors.New("image inspect boom")
+		resources := newTestResourceClientWithImageInspectErr(wantErr)
+		m := newTestModel(newTestLogRetargeter(), resources)
+		m.tab = tabContainers
+		m.focus = focusList
+		m.rows = []row{{kind: rowContainer, key: "id:c1", container: Container{ID: "c1", Name: "web"}}}
+		m.cursor = 0
+
+		_, cmd := m.updateKeys(newTestKeyMsg("y"))
+
+		require.NotNil(t, cmd)
+		got, ok := cmd().(watcherErrMsg)
+		require.True(t, ok)
+		assert.Equal(t, wantErr, got.err)
+	})
+
+	t.Run("compose active forwards j to the compose viewport", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 10})
+		m = got.(Model)
+		m.composeVP.Height = 2
+		m.compose = strings.Repeat("line\n", 20)
+		m.composeVP.SetContent(m.compose)
+
+		gotModel, cmd := m.updateKeys(newTestKeyMsg("j"))
+
+		assert.Equal(t, 1, gotModel.(Model).composeVP.YOffset)
+		assert.Nil(t, cmd)
+	})
+}
+
+type testResourceClientWithInspectErr struct {
+	containerInspectErr error
+	imageInspectErr     error
+	calls               []testResourceCall
+}
+
+func newTestResourceClientWithContainerInspectErr(err error) *testResourceClientWithInspectErr {
+	return &testResourceClientWithInspectErr{containerInspectErr: err}
+}
+
+func newTestResourceClientWithImageInspectErr(err error) *testResourceClientWithInspectErr {
+	return &testResourceClientWithInspectErr{imageInspectErr: err}
+}
+
+func (c *testResourceClientWithInspectErr) VolumeRemove(ctx context.Context, volumeID string, options client.VolumeRemoveOptions) (client.VolumeRemoveResult, error) {
+	return client.VolumeRemoveResult{}, nil
+}
+
+func (c *testResourceClientWithInspectErr) NetworkRemove(ctx context.Context, networkID string, options client.NetworkRemoveOptions) (client.NetworkRemoveResult, error) {
+	return client.NetworkRemoveResult{}, nil
+}
+
+func (c *testResourceClientWithInspectErr) ContainerStart(ctx context.Context, containerID string, options client.ContainerStartOptions) (client.ContainerStartResult, error) {
+	return client.ContainerStartResult{}, nil
+}
+
+func (c *testResourceClientWithInspectErr) ContainerStop(ctx context.Context, containerID string, options client.ContainerStopOptions) (client.ContainerStopResult, error) {
+	return client.ContainerStopResult{}, nil
+}
+
+func (c *testResourceClientWithInspectErr) ContainerRestart(ctx context.Context, containerID string, options client.ContainerRestartOptions) (client.ContainerRestartResult, error) {
+	return client.ContainerRestartResult{}, nil
+}
+
+func (c *testResourceClientWithInspectErr) ContainerKill(ctx context.Context, containerID string, options client.ContainerKillOptions) (client.ContainerKillResult, error) {
+	return client.ContainerKillResult{}, nil
+}
+
+func (c *testResourceClientWithInspectErr) ContainerPause(ctx context.Context, containerID string, options client.ContainerPauseOptions) (client.ContainerPauseResult, error) {
+	return client.ContainerPauseResult{}, nil
+}
+
+func (c *testResourceClientWithInspectErr) ContainerUnpause(ctx context.Context, containerID string, options client.ContainerUnpauseOptions) (client.ContainerUnpauseResult, error) {
+	return client.ContainerUnpauseResult{}, nil
+}
+
+func (c *testResourceClientWithInspectErr) ContainerRemove(ctx context.Context, containerID string, options client.ContainerRemoveOptions) (client.ContainerRemoveResult, error) {
+	return client.ContainerRemoveResult{}, nil
+}
+
+func (c *testResourceClientWithInspectErr) ContainerInspect(ctx context.Context, containerID string, options client.ContainerInspectOptions) (client.ContainerInspectResult, error) {
+	c.calls = append(c.calls, testResourceCall{method: "inspect", id: containerID})
+	if c.containerInspectErr != nil {
+		return client.ContainerInspectResult{}, c.containerInspectErr
+	}
+	return client.ContainerInspectResult{
+		Container: container.InspectResponse{
+			Name: "/web",
+			Config: &container.Config{
+				Image:  "nginx:latest",
+				Labels: map[string]string{"com.docker.compose.service": "web"},
+			},
+		},
+	}, nil
+}
+
+func (c *testResourceClientWithInspectErr) ImageInspect(ctx context.Context, imageID string, inspectOpts ...client.ImageInspectOption) (client.ImageInspectResult, error) {
+	c.calls = append(c.calls, testResourceCall{method: "image-inspect", id: imageID})
+	if c.imageInspectErr != nil {
+		return client.ImageInspectResult{}, c.imageInspectErr
+	}
+	return client.ImageInspectResult{}, nil
 }
