@@ -1088,6 +1088,47 @@ func TestViewLayout(t *testing.T) {
 		require.Equal(t, 30, lipgloss.Height(gotView))
 	})
 
+	t.Run("header carries the duck", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+		m = got.(Model)
+
+		gotView := m.View()
+
+		require.Contains(t, gotView, "🦆 duck")
+	})
+
+	t.Run("empty tabs carry the duck", func(t *testing.T) {
+		t.Parallel()
+
+		type testCase struct {
+			name string
+			tab  tabID
+			want string
+		}
+		tests := []testCase{
+			{name: "containers", tab: tabContainers, want: "no containers 🦆"},
+			{name: "volumes", tab: tabVolumes, want: "no volumes 🦆"},
+			{name: "networks", tab: tabNetworks, want: "no networks 🦆"},
+		}
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+				got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+				m = got.(Model)
+				m.tab = tc.tab
+
+				gotView := m.View()
+
+				require.Contains(t, gotView, tc.want)
+			})
+		}
+	})
+
 	t.Run("titles row follows the active tab", func(t *testing.T) {
 		t.Parallel()
 
