@@ -3140,4 +3140,123 @@ func TestFilter(t *testing.T) {
 
 		assert.Equal(t, []string{"web"}, containerRowNames(m.rows))
 	})
+
+	t.Run("resource tabs", func(t *testing.T) {
+		t.Parallel()
+
+		type tabCase struct {
+			name       string
+			tab        tabID
+			setup      func(m Model) Model
+			filterText string
+			wantLabel  string
+			wantKind   deleteKind
+			filtered   func(m Model) int
+			label      func(m Model, cursor int) string
+			updateKeys func(m Model, msg tea.KeyMsg) (Model, tea.Cmd)
+		}
+
+		tests := []tabCase{
+			{
+				name: "volumes",
+				tab:  tabVolumes,
+				setup: func(m Model) Model {
+					m.volumes = []Volume{{Name: "data"}, {Name: "cache"}, {Name: "logs"}}
+					return m
+				},
+				filterText: "ca",
+				wantLabel:  "cache",
+				wantKind:   deleteVolume,
+				filtered:   func(m Model) int { return len(m.filteredVolumes()) },
+				label:      func(m Model, cursor int) string { return m.filteredVolumes()[cursor].Name },
+				updateKeys: func(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
+					got, cmd := m.updateVolumeKeys(msg)
+					return got.(Model), cmd
+				},
+			},
+			{
+				name: "networks",
+				tab:  tabNetworks,
+				setup: func(m Model) Model {
+					m.networks = []Network{{Name: "app-net"}, {Name: "cache-net"}, {Name: "db-net"}}
+					return m
+				},
+				filterText: "cache",
+				wantLabel:  "cache-net",
+				wantKind:   deleteNetwork,
+				filtered:   func(m Model) int { return len(m.filteredNetworks()) },
+				label:      func(m Model, cursor int) string { return m.filteredNetworks()[cursor].Name },
+				updateKeys: func(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
+					got, cmd := m.updateNetworkKeys(msg)
+					return got.(Model), cmd
+				},
+			},
+			{
+				name: "images",
+				tab:  tabImages,
+				setup: func(m Model) Model {
+					m.images = []Image{{RepoTag: "nginx:latest"}, {RepoTag: "redis:7"}, {RepoTag: "postgres:15"}}
+					return m
+				},
+				filterText: "redis",
+				wantLabel:  "redis:7",
+				wantKind:   deleteImage,
+				filtered:   func(m Model) int { return len(m.filteredImages()) },
+				label:      func(m Model, cursor int) string { return m.filteredImages()[cursor].RepoTag },
+				updateKeys: func(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
+					got, cmd := m.updateImageKeys(msg)
+					return got.(Model), cmd
+				},
+			},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				t.Run("filter narrows the list to the matching resource", func(t *testing.T) {
+					t.Parallel()
+
+					m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+					m.tab = tc.tab
+					m = tc.setup(m)
+
+					m = typeFilter(m, tc.filterText)
+
+					require.Equal(t, 1, tc.filtered(m))
+					assert.Equal(t, tc.wantLabel, tc.label(m, 0))
+				})
+
+				t.Run("d with an active filter arms confirm for the visible resource, not the unfiltered index", func(t *testing.T) {
+					t.Parallel()
+
+					m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+					m.tab = tc.tab
+					m = tc.setup(m)
+					m.filter = tc.filterText
+
+					got, cmd := tc.updateKeys(m, newTestKeyMsg("d"))
+
+					require.NotNil(t, got.confirm)
+					assert.Equal(t, tc.wantKind, got.confirm.kind)
+					assert.Equal(t, tc.wantLabel, got.confirm.label)
+					assert.Nil(t, cmd)
+				})
+
+				t.Run("esc clears the filter and restores the list", func(t *testing.T) {
+					t.Parallel()
+
+					m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+					m.tab = tc.tab
+					m = tc.setup(m)
+					m.filter = tc.filterText
+
+					got, _ := tc.updateKeys(m, newTestKeyMsg("esc"))
+
+					assert.Equal(t, "", got.filter)
+					assert.Equal(t, 3, tc.filtered(got))
+				})
+			})
+		}
+	})
 }
