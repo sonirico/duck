@@ -1667,7 +1667,16 @@ func TestDetailView(t *testing.T) {
 		m = got.(Model)
 		m.tab = tabContainers
 		m.focus = focusList
-		c := Container{ID: "c1", Name: "web", Image: "nginx:latest", Ports: []string{"80:8080/tcp"}}
+		c := Container{
+			ID:       "c1",
+			Name:     "web",
+			Image:    "nginx:latest",
+			Project:  "app",
+			Service:  "web",
+			Ports:    []string{"80:8080/tcp"},
+			Volumes:  []string{"data"},
+			Networks: []string{"app_net"},
+		}
 		m.rows = []row{{kind: rowContainer, key: "id:c1", container: c}}
 		m.cursor = 0
 
@@ -1678,6 +1687,11 @@ func TestDetailView(t *testing.T) {
 		assert.Contains(t, detail, "web")
 		assert.Contains(t, detail, "nginx:latest")
 		assert.Contains(t, detail, "80:8080/tcp")
+		assert.Contains(t, detail, "project: app")
+		assert.Contains(t, detail, "service: web")
+		assert.Contains(t, detail, "volumes:")
+		assert.Contains(t, detail, "networks:")
+		assert.Contains(t, detail, "app_net")
 	})
 
 	t.Run("enter over a stack row fills detail with services and aggregated volumes/networks", func(t *testing.T) {
@@ -1689,8 +1703,8 @@ func TestDetailView(t *testing.T) {
 		m.tab = tabContainers
 		m.focus = focusList
 		m.containers = []Container{
-			{ID: "c1", Name: "app_web_1", Project: "app", Service: "web", Volumes: []string{"data"}, Networks: []string{"app_net"}},
-			{ID: "c2", Name: "app_db_1", Project: "app", Service: "db", Volumes: []string{"db-data"}, Networks: []string{"app_net"}},
+			{ID: "c1", Name: "app_web_1", Project: "app", Service: "web", State: "running", Volumes: []string{"data"}, Networks: []string{"app_net"}, Ports: []string{"80:8080/tcp"}},
+			{ID: "c2", Name: "app_db_1", Project: "app", Volumes: []string{"db-data"}, Networks: []string{"app_net"}},
 		}
 		m.rows = []row{{kind: rowStack, key: "stack:app", project: "app"}}
 		m.cursor = 0
@@ -1701,10 +1715,31 @@ func TestDetailView(t *testing.T) {
 		detail := gotModel.(Model).detail
 		assert.Contains(t, detail, "services:")
 		assert.Contains(t, detail, "web")
-		assert.Contains(t, detail, "db")
+		assert.Contains(t, detail, "app_db_1")
 		assert.Contains(t, detail, "data")
 		assert.Contains(t, detail, "db-data")
 		assert.Contains(t, detail, "app_net")
+		assert.Contains(t, detail, "ports:")
+		assert.Contains(t, detail, "80:8080/tcp")
+	})
+
+	t.Run("enter over a stack row with an empty project renders standalone", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+		m = got.(Model)
+		m.tab = tabContainers
+		m.focus = focusList
+		m.containers = []Container{{ID: "c1", Name: "standalone_web"}}
+		m.rows = []row{{kind: rowStack, key: "stack:", project: ""}}
+		m.cursor = 0
+
+		gotModel, cmd := m.updateKeys(newTestKeyMsg("enter"))
+
+		assert.Nil(t, cmd)
+		detail := gotModel.(Model).detail
+		assert.Contains(t, detail, "project: standalone")
 	})
 
 	t.Run("detail active shows the detail title and scroll footer, esc returns to logs", func(t *testing.T) {
@@ -1728,6 +1763,22 @@ func TestDetailView(t *testing.T) {
 		assert.Equal(t, "", gotModel.detail)
 		assert.Nil(t, cmd)
 		assert.Contains(t, gotModel.View(), " logs")
+	})
+
+	t.Run("non-esc key while detail active is forwarded to the detail viewport", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+		m = got.(Model)
+		m.tab = tabContainers
+		m.detail = "name: web\n"
+		m.detailVP.SetContent(m.detail)
+
+		got, _ = m.updateKeys(newTestKeyMsg("down"))
+
+		gotModel := got.(Model)
+		assert.Equal(t, "name: web\n", gotModel.detail)
 	})
 
 	t.Run("enter with a pending confirm does not assign detail", func(t *testing.T) {
