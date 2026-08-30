@@ -17,7 +17,7 @@ A terminal UI for Docker: live container tree, aggregated stack logs, and intera
 - **Correct stdout/stderr demuxing**: logs are demultiplexed with `stdcopy`, so non-TTY containers render cleanly.
 - **Volumes tab**: press 2 to list volumes with drivers and usage; unused volumes can be deleted with a y/n confirmation.
 - **Networks tab**: press 3 to list networks with driver, subnet and usage; unused non-builtin networks can be deleted with a y/n confirmation.
-- **Container lifecycle operations**: stop, start, restart, pause/unpause, kill and remove (with a y/n confirmation) the selected container directly from the list.
+- **Container lifecycle operations**: stop, start, restart, pause/unpause, kill and remove (with a y/n confirmation) the selected container directly from the list. Stop, start, restart, kill and remove also apply to an entire selected stack.
 - **Compose view**: press `y` to view the docker-compose file reconstructed from the Docker API, without reading the filesystem.
 - **Detail view**: press `enter` on a stack or container to see its services, ports, volumes and networks, without extra calls to the daemon.
 
@@ -61,11 +61,11 @@ just build
 | `1` / `2` / `3` | anywhere | switch tab containers/volumes/networks |
 | `left` / `right` | anywhere | cycle tab containers/volumes/networks |
 | `e`       | container list | open an interactive shell in the selected container |
-| `s` / `S` | container list | stop / start the selected container |
-| `r`       | container list | restart the selected container       |
+| `s` / `S` | container list | stop / start the selected container or stack |
+| `r`       | container list | restart the selected container or stack       |
 | `p`       | container list | pause / unpause the selected container |
-| `K`       | container list | kill the selected container          |
-| `d`       | container list | remove the selected container (asks y/n) |
+| `K`       | container list | kill the selected container or stack          |
+| `d`       | container list | remove the selected container or stack (asks y/n) |
 | `y`       | container list | view the reconstructed docker-compose |
 | `esc`     | compose view | close the compose view                |
 | `enter`   | container list | open the detail view for the selected stack/container |
