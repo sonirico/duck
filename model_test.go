@@ -625,20 +625,83 @@ func TestContainerOpKeys(t *testing.T) {
 		assert.Nil(t, cmd)
 	})
 
-	t.Run("d over a stack row arms nothing", func(t *testing.T) {
+	t.Run("d over a stack row arms confirm with the project label and its container ids", func(t *testing.T) {
 		t.Parallel()
 
 		resources := newTestResourceClient(nil)
 		m := newTestModel(newTestLogRetargeter(), resources)
 		m.tab = tabContainers
 		m.focus = focusList
-		m.rows = []row{{kind: rowStack, key: "stack:app"}}
+		m.containers = []Container{
+			{ID: "c1", Project: "app"},
+			{ID: "c2", Project: "app"},
+			{ID: "c3", Project: "other"},
+		}
+		m.rows = []row{{kind: rowStack, key: "stack:app", project: "app"}}
 		m.cursor = 0
 
 		got, cmd := m.updateKeys(newTestKeyMsg("d"))
 
-		assert.Nil(t, got.(Model).confirm)
+		assert.Equal(t, &pendingDelete{kind: deleteStack, ids: []string{"c1", "c2"}, label: "app"}, got.(Model).confirm)
 		assert.Nil(t, cmd)
+	})
+
+	t.Run("d over the standalone stack row arms confirm with the standalone label", func(t *testing.T) {
+		t.Parallel()
+
+		resources := newTestResourceClient(nil)
+		m := newTestModel(newTestLogRetargeter(), resources)
+		m.tab = tabContainers
+		m.focus = focusList
+		m.containers = []Container{{ID: "c1", Project: ""}}
+		m.rows = []row{{kind: rowStack, key: "stack:"}}
+		m.cursor = 0
+
+		got, cmd := m.updateKeys(newTestKeyMsg("d"))
+
+		assert.Equal(t, &pendingDelete{kind: deleteStack, ids: []string{"c1"}, label: "standalone"}, got.(Model).confirm)
+		assert.Nil(t, cmd)
+	})
+
+	t.Run("y with a pending stack confirm calls ContainerRemove for each id", func(t *testing.T) {
+		t.Parallel()
+
+		resources := newTestResourceClient(nil)
+		m := newTestModel(newTestLogRetargeter(), resources)
+		m.tab = tabContainers
+		m.focus = focusList
+		m.confirm = &pendingDelete{kind: deleteStack, ids: []string{"c1", "c2"}, label: "app"}
+
+		got, cmd := m.updateKeys(newTestKeyMsg("y"))
+
+		assert.Nil(t, got.(Model).confirm)
+		require.NotNil(t, cmd)
+		assert.Nil(t, cmd())
+		require.Len(t, resources.calls, 2)
+		assert.Equal(t, testResourceCall{method: "remove", id: "c1"}, resources.calls[0])
+		assert.Equal(t, testResourceCall{method: "remove", id: "c2"}, resources.calls[1])
+	})
+
+	t.Run("n and esc clear a pending stack confirm without calling ContainerRemove", func(t *testing.T) {
+		t.Parallel()
+
+		for _, key := range []string{"n", "esc"} {
+			t.Run(key, func(t *testing.T) {
+				t.Parallel()
+
+				resources := newTestResourceClient(nil)
+				m := newTestModel(newTestLogRetargeter(), resources)
+				m.tab = tabContainers
+				m.focus = focusList
+				m.confirm = &pendingDelete{kind: deleteStack, ids: []string{"c1", "c2"}, label: "app"}
+
+				got, cmd := m.updateKeys(newTestKeyMsg(key))
+
+				assert.Nil(t, got.(Model).confirm)
+				assert.Nil(t, cmd)
+				assert.Empty(t, resources.calls)
+			})
+		}
 	})
 
 	t.Run("y with a pending confirm calls ContainerRemove with the id", func(t *testing.T) {
