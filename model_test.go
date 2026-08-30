@@ -51,6 +51,7 @@ func newTestResourceClient(
 				Config: &container.Config{
 					Image:  "nginx:latest",
 					Labels: map[string]string{"com.docker.compose.service": "web"},
+					Env:    []string{"FOO=bar"},
 				},
 			},
 		},
@@ -122,6 +123,14 @@ func (c *testResourceClient) ImageInspect(ctx context.Context, imageID string, i
 func (c *testResourceClient) ContainerStats(ctx context.Context, containerID string, options client.ContainerStatsOptions) (client.ContainerStatsResult, error) {
 	c.calls = append(c.calls, testResourceCall{method: "stats", id: containerID})
 	return c.containerStats(ctx, containerID, options)
+}
+
+func (c *testResourceClient) ContainerTop(ctx context.Context, containerID string, options client.ContainerTopOptions) (client.ContainerTopResult, error) {
+	c.calls = append(c.calls, testResourceCall{method: "top", id: containerID})
+	return client.ContainerTopResult{
+		Titles:    []string{"PID", "CMD"},
+		Processes: [][]string{{"123", "nginx"}},
+	}, nil
 }
 
 func (c *testResourceClient) ContainerPrune(ctx context.Context, opts client.ContainerPruneOptions) (client.ContainerPruneResult, error) {
@@ -2575,7 +2584,7 @@ func TestDetailView(t *testing.T) {
 		assert.Contains(t, gotView, "y compose")
 	})
 
-	t.Run("enter on a running container returns a cmd producing statsMsg with the container stat", func(t *testing.T) {
+	t.Run("enter on a running container returns a batched cmd producing statsMsg with the container stat", func(t *testing.T) {
 		t.Parallel()
 
 		statsJSON := `{"cpu_stats":{"cpu_usage":{"total_usage":150},"system_cpu_usage":2000,"online_cpus":4},"precpu_stats":{"cpu_usage":{"total_usage":100},"system_cpu_usage":1000},"memory_stats":{"usage":1024,"limit":4096}}`
@@ -2595,8 +2604,52 @@ func TestDetailView(t *testing.T) {
 		_, cmd := m.updateKeys(newTestKeyMsg("enter"))
 
 		require.NotNil(t, cmd)
+		batch, ok := cmd().(tea.BatchMsg)
+		require.True(t, ok)
 		want := statsMsg{stats: []ContainerStat{{ID: "c1", CPUPercent: 20.0, MemUsage: 1024, MemLimit: 4096}}}
-		assert.Equal(t, want, cmd())
+		var gotStats tea.Msg
+		for _, sub := range batch {
+			if msg, ok := sub().(statsMsg); ok {
+				gotStats = msg
+			}
+		}
+		assert.Equal(t, want, gotStats)
+	})
+
+	t.Run("enter on a running container returns a batched cmd producing detailExtraMsg with env and procs", func(t *testing.T) {
+		t.Parallel()
+
+		statsJSON := `{"cpu_stats":{"cpu_usage":{"total_usage":150},"system_cpu_usage":2000,"online_cpus":4},"precpu_stats":{"cpu_usage":{"total_usage":100},"system_cpu_usage":1000},"memory_stats":{"usage":1024,"limit":4096}}`
+		resources := newTestResourceClient(nil)
+		resources.containerStats = func(ctx context.Context, containerID string, options client.ContainerStatsOptions) (client.ContainerStatsResult, error) {
+			return client.ContainerStatsResult{Body: io.NopCloser(strings.NewReader(statsJSON))}, nil
+		}
+		m := newTestModel(newTestLogRetargeter(), resources)
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+		m = got.(Model)
+		m.tab = tabContainers
+		m.focus = focusList
+		c := Container{ID: "c1", Name: "web", State: "running"}
+		m.rows = []row{{kind: rowContainer, key: "id:c1", container: c}}
+		m.cursor = 0
+
+		_, cmd := m.updateKeys(newTestKeyMsg("enter"))
+
+		require.NotNil(t, cmd)
+		batch, ok := cmd().(tea.BatchMsg)
+		require.True(t, ok)
+		want := detailExtraMsg{id: "c1", extra: detailExtra{
+			env:    []string{"FOO=bar"},
+			titles: []string{"PID", "CMD"},
+			procs:  [][]string{{"123", "nginx"}},
+		}}
+		var gotExtra tea.Msg
+		for _, sub := range batch {
+			if msg, ok := sub().(detailExtraMsg); ok {
+				gotExtra = msg
+			}
+		}
+		assert.Equal(t, want, gotExtra)
 	})
 
 	t.Run("enter on a stopped container returns no stats cmd", func(t *testing.T) {
@@ -2665,6 +2718,52 @@ func TestDetailView(t *testing.T) {
 		gotModel := got.(Model)
 		assert.Equal(t, "", gotModel.detail)
 		assert.Equal(t, ContainerStat{ID: "c1", CPUPercent: 20.0, MemUsage: 1024, MemLimit: 4096}, gotModel.stats["c1"])
+	})
+
+	t.Run("detailExtraMsg with detail open re-renders the detail with env and top", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+		m = got.(Model)
+		c := Container{ID: "c1", Name: "web", State: "running"}
+		rowCopy := row{kind: rowContainer, key: "id:c1", container: c}
+		m.detailRow = &rowCopy
+		m.detail = m.renderContainerDetail(c)
+		m.detailVP.SetContent(m.detail)
+		extra := detailExtra{
+			env:    []string{"FOO=bar"},
+			titles: []string{"PID", "CMD"},
+			procs:  [][]string{{"123", "nginx"}},
+		}
+
+		got, _ = m.Update(detailExtraMsg{id: "c1", extra: extra})
+
+		gotModel := got.(Model)
+		assert.Contains(t, gotModel.detail, "env:")
+		assert.Contains(t, gotModel.detail, "top:")
+		assert.Contains(t, gotModel.detail, "FOO=bar")
+		assert.Contains(t, gotModel.detail, "nginx")
+	})
+
+	t.Run("detailExtraMsg without detail open only merges extras without touching detail", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+		m = got.(Model)
+		m.detail = ""
+		extra := detailExtra{
+			env:    []string{"FOO=bar"},
+			titles: []string{"PID", "CMD"},
+			procs:  [][]string{{"123", "nginx"}},
+		}
+
+		got, _ = m.Update(detailExtraMsg{id: "c1", extra: extra})
+
+		gotModel := got.(Model)
+		assert.Equal(t, "", gotModel.detail)
+		assert.Equal(t, extra, gotModel.extras["c1"])
 	})
 }
 
@@ -2815,6 +2914,10 @@ func TestStatsCmd(t *testing.T) {
 
 func (c *testResourceClientWithInspectErr) ContainerStats(ctx context.Context, containerID string, options client.ContainerStatsOptions) (client.ContainerStatsResult, error) {
 	return client.ContainerStatsResult{Body: io.NopCloser(strings.NewReader("{}"))}, nil
+}
+
+func (c *testResourceClientWithInspectErr) ContainerTop(ctx context.Context, containerID string, options client.ContainerTopOptions) (client.ContainerTopResult, error) {
+	return client.ContainerTopResult{}, nil
 }
 
 func (c *testResourceClientWithInspectErr) ContainerPrune(ctx context.Context, opts client.ContainerPruneOptions) (client.ContainerPruneResult, error) {
