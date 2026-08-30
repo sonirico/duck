@@ -376,6 +376,9 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.filter = ""
 			m.filtering = false
 			m.cursor = 0
+			m.volCursor = 0
+			m.netCursor = 0
+			m.imgCursor = 0
 			m.rows = newRows(m.filteredContainers())
 			if m.tab == tabContainers {
 				cmd = m.retarget()
@@ -387,6 +390,9 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				r := []rune(m.filter)
 				m.filter = string(r[:len(r)-1])
 				m.cursor = 0
+				m.volCursor = 0
+				m.netCursor = 0
+				m.imgCursor = 0
 				m.rows = newRows(m.filteredContainers())
 				if m.tab == tabContainers {
 					cmd = m.retarget()
@@ -396,6 +402,9 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if len(msg.Runes) == 1 {
 				m.filter += string(msg.Runes)
 				m.cursor = 0
+				m.volCursor = 0
+				m.netCursor = 0
+				m.imgCursor = 0
 				m.rows = newRows(m.filteredContainers())
 				if m.tab == tabContainers {
 					cmd = m.retarget()
@@ -606,6 +615,9 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		} else if m.filter != "" {
 			m.filter = ""
 			m.cursor = 0
+			m.volCursor = 0
+			m.netCursor = 0
+			m.imgCursor = 0
 			m.rows = newRows(m.filteredContainers())
 			return m, m.retarget()
 		}
@@ -616,13 +628,14 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) updateVolumeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "j", "down", "k", "up", "g", "G":
-		m.volCursor = moveListCursor(m.volCursor, len(m.volumes), msg.String())
+		m.volCursor = moveListCursor(m.volCursor, len(m.filteredVolumes()), msg.String())
 		return m, nil
 	case "d":
-		if m.confirm != nil || m.volCursor < 0 || m.volCursor >= len(m.volumes) {
+		vols := m.filteredVolumes()
+		if m.confirm != nil || m.volCursor < 0 || m.volCursor >= len(vols) {
 			return m, nil
 		}
-		v := m.volumes[m.volCursor]
+		v := vols[m.volCursor]
 		if volumeUsedBy(m.volumes, m.containers)[v.Name] == 0 {
 			m.confirm = &pendingDelete{kind: deleteVolume, id: v.Name, label: v.Name}
 		}
@@ -635,7 +648,14 @@ func (m Model) updateVolumeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "y":
 		return m.applyConfirm()
 	case "n", "esc":
-		m.confirm = nil
+		if m.confirm != nil {
+			m.confirm = nil
+		} else if m.filter != "" {
+			m.filter = ""
+			m.volCursor = 0
+			m.netCursor = 0
+			m.imgCursor = 0
+		}
 		return m, nil
 	}
 	return m, nil
@@ -644,13 +664,14 @@ func (m Model) updateVolumeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) updateNetworkKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "j", "down", "k", "up", "g", "G":
-		m.netCursor = moveListCursor(m.netCursor, len(m.networks), msg.String())
+		m.netCursor = moveListCursor(m.netCursor, len(m.filteredNetworks()), msg.String())
 		return m, nil
 	case "d":
-		if m.confirm != nil || m.netCursor < 0 || m.netCursor >= len(m.networks) {
+		nets := m.filteredNetworks()
+		if m.confirm != nil || m.netCursor < 0 || m.netCursor >= len(nets) {
 			return m, nil
 		}
-		n := m.networks[m.netCursor]
+		n := nets[m.netCursor]
 		if networkUsedBy(m.networks, m.containers)[n.Name] == 0 && !isBuiltinNetwork(n.Name) {
 			m.confirm = &pendingDelete{kind: deleteNetwork, id: n.ID, label: n.Name}
 		}
@@ -663,7 +684,14 @@ func (m Model) updateNetworkKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "y":
 		return m.applyConfirm()
 	case "n", "esc":
-		m.confirm = nil
+		if m.confirm != nil {
+			m.confirm = nil
+		} else if m.filter != "" {
+			m.filter = ""
+			m.volCursor = 0
+			m.netCursor = 0
+			m.imgCursor = 0
+		}
 		return m, nil
 	}
 	return m, nil
@@ -672,13 +700,14 @@ func (m Model) updateNetworkKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) updateImageKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "j", "down", "k", "up", "g", "G":
-		m.imgCursor = moveListCursor(m.imgCursor, len(m.images), msg.String())
+		m.imgCursor = moveListCursor(m.imgCursor, len(m.filteredImages()), msg.String())
 		return m, nil
 	case "d":
-		if m.confirm != nil || m.imgCursor < 0 || m.imgCursor >= len(m.images) {
+		imgs := m.filteredImages()
+		if m.confirm != nil || m.imgCursor < 0 || m.imgCursor >= len(imgs) {
 			return m, nil
 		}
-		img := m.images[m.imgCursor]
+		img := imgs[m.imgCursor]
 		if imageUsedBy(m.images, m.containers)[img.ID] == 0 {
 			m.confirm = &pendingDelete{kind: deleteImage, id: img.ID, label: img.RepoTag}
 		}
@@ -691,7 +720,14 @@ func (m Model) updateImageKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "y":
 		return m.applyConfirm()
 	case "n", "esc":
-		m.confirm = nil
+		if m.confirm != nil {
+			m.confirm = nil
+		} else if m.filter != "" {
+			m.filter = ""
+			m.volCursor = 0
+			m.netCursor = 0
+			m.imgCursor = 0
+		}
 		return m, nil
 	}
 	return m, nil
@@ -961,6 +997,36 @@ func (m Model) filteredContainers() []Container {
 	return out
 }
 
+func (m Model) filteredVolumes() []Volume {
+	var out []Volume
+	for _, v := range m.volumes {
+		if matchesFilter(m.filter, v.Name) {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+func (m Model) filteredNetworks() []Network {
+	var out []Network
+	for _, n := range m.networks {
+		if matchesFilter(m.filter, n.Name) {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+func (m Model) filteredImages() []Image {
+	var out []Image
+	for _, i := range m.images {
+		if matchesFilter(m.filter, i.RepoTag) {
+			out = append(out, i)
+		}
+	}
+	return out
+}
+
 func newRows(containers []Container) []row {
 	byProject := make(map[string][]Container)
 	for _, c := range containers {
@@ -1056,16 +1122,18 @@ func (m Model) View() string {
 	var footer string
 	if m.tab == tabVolumes {
 		hint := ""
-		if m.volCursor >= 0 && m.volCursor < len(m.volumes) {
-			if volumeUsedBy(m.volumes, m.containers)[m.volumes[m.volCursor].Name] > 0 {
+		vols := m.filteredVolumes()
+		if m.volCursor >= 0 && m.volCursor < len(vols) {
+			if volumeUsedBy(m.volumes, m.containers)[vols[m.volCursor].Name] > 0 {
 				hint = "d: volume in use"
 			}
 		}
 		footer = resourceFooter(m.confirm, hint)
 	} else if m.tab == tabNetworks {
 		hint := ""
-		if m.netCursor >= 0 && m.netCursor < len(m.networks) {
-			n := m.networks[m.netCursor]
+		nets := m.filteredNetworks()
+		if m.netCursor >= 0 && m.netCursor < len(nets) {
+			n := nets[m.netCursor]
 			used := networkUsedBy(m.networks, m.containers)[n.Name]
 			if used > 0 {
 				hint = "d: network in use"
@@ -1076,8 +1144,9 @@ func (m Model) View() string {
 		footer = resourceFooter(m.confirm, hint)
 	} else if m.tab == tabImages {
 		hint := ""
-		if m.imgCursor >= 0 && m.imgCursor < len(m.images) {
-			if imageUsedBy(m.images, m.containers)[m.images[m.imgCursor].ID] > 0 {
+		imgs := m.filteredImages()
+		if m.imgCursor >= 0 && m.imgCursor < len(imgs) {
+			if imageUsedBy(m.images, m.containers)[imgs[m.imgCursor].ID] > 0 {
 				hint = "d: image in use"
 			}
 		}
@@ -1300,8 +1369,9 @@ func (m Model) renderResourceRows(rows []string, cursor int, empty string) strin
 
 func (m Model) renderVolumeList() string {
 	used := volumeUsedBy(m.volumes, m.containers)
-	rows := make([]string, 0, len(m.volumes))
-	for _, v := range m.volumes {
+	vols := m.filteredVolumes()
+	rows := make([]string, 0, len(vols))
+	for _, v := range vols {
 		rows = append(rows, formatVolumeRow(v, used[v.Name]))
 	}
 	return m.renderResourceRows(rows, m.volCursor, "no volumes 🦆")
@@ -1312,10 +1382,11 @@ func formatVolumeRow(v Volume, used int) string {
 }
 
 func (m Model) renderVolumeDetail() string {
-	if m.volCursor < 0 || m.volCursor >= len(m.volumes) {
+	vols := m.filteredVolumes()
+	if m.volCursor < 0 || m.volCursor >= len(vols) {
 		return styleDim.Render("no volumes 🦆")
 	}
-	v := m.volumes[m.volCursor]
+	v := vols[m.volCursor]
 
 	var b strings.Builder
 	b.WriteString("name: " + v.Name + "\n")
@@ -1356,8 +1427,9 @@ func (m Model) renderVolumeDetail() string {
 
 func (m Model) renderNetworkList() string {
 	used := networkUsedBy(m.networks, m.containers)
-	rows := make([]string, 0, len(m.networks))
-	for _, n := range m.networks {
+	nets := m.filteredNetworks()
+	rows := make([]string, 0, len(nets))
+	for _, n := range nets {
 		rows = append(rows, formatNetworkRow(n, used[n.Name]))
 	}
 	return m.renderResourceRows(rows, m.netCursor, "no networks 🦆")
@@ -1381,10 +1453,11 @@ func isBuiltinNetwork(name string) bool {
 }
 
 func (m Model) renderNetworkDetail() string {
-	if m.netCursor < 0 || m.netCursor >= len(m.networks) {
+	nets := m.filteredNetworks()
+	if m.netCursor < 0 || m.netCursor >= len(nets) {
 		return styleDim.Render("no networks 🦆")
 	}
-	n := m.networks[m.netCursor]
+	n := nets[m.netCursor]
 
 	var b strings.Builder
 	b.WriteString("id: " + n.ID + "\n")
@@ -1412,8 +1485,9 @@ func (m Model) renderNetworkDetail() string {
 
 func (m Model) renderImageList() string {
 	used := imageUsedBy(m.images, m.containers)
-	rows := make([]string, 0, len(m.images))
-	for _, i := range m.images {
+	imgs := m.filteredImages()
+	rows := make([]string, 0, len(imgs))
+	for _, i := range imgs {
 		rows = append(rows, formatImageRow(i, used[i.ID]))
 	}
 	return m.renderResourceRows(rows, m.imgCursor, "no images 🦆")
@@ -1424,10 +1498,11 @@ func formatImageRow(i Image, used int) string {
 }
 
 func (m Model) renderImageDetail() string {
-	if m.imgCursor < 0 || m.imgCursor >= len(m.images) {
+	imgs := m.filteredImages()
+	if m.imgCursor < 0 || m.imgCursor >= len(imgs) {
 		return styleDim.Render("no images 🦆")
 	}
-	img := m.images[m.imgCursor]
+	img := imgs[m.imgCursor]
 
 	var b strings.Builder
 	b.WriteString("id: " + img.ID + "\n")
