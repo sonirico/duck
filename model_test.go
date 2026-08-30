@@ -510,6 +510,60 @@ func TestUpdateKeys(t *testing.T) {
 		assert.Nil(t, cmd)
 	})
 
+	t.Run("j moves the cursor down in the containers list", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		m.focus = focusList
+		m.tab = tabContainers
+		m.rows = []row{
+			{kind: rowContainer, key: "id:c1", container: Container{ID: "c1"}},
+			{kind: rowContainer, key: "id:c2", container: Container{ID: "c2"}},
+		}
+		m.cursor = 0
+
+		got, cmd := m.updateKeys(newTestKeyMsg("j"))
+
+		assert.Equal(t, 1, got.(Model).cursor)
+		require.NotNil(t, cmd)
+	})
+
+	t.Run("g jumps to the first row in the containers list", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		m.focus = focusList
+		m.tab = tabContainers
+		m.rows = []row{
+			{kind: rowContainer, key: "id:c1", container: Container{ID: "c1"}},
+			{kind: rowContainer, key: "id:c2", container: Container{ID: "c2"}},
+		}
+		m.cursor = 1
+
+		got, cmd := m.updateKeys(newTestKeyMsg("g"))
+
+		assert.Equal(t, 0, got.(Model).cursor)
+		require.NotNil(t, cmd)
+	})
+
+	t.Run("G jumps to the last row in the containers list", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		m.focus = focusList
+		m.tab = tabContainers
+		m.rows = []row{
+			{kind: rowContainer, key: "id:c1", container: Container{ID: "c1"}},
+			{kind: rowContainer, key: "id:c2", container: Container{ID: "c2"}},
+		}
+		m.cursor = 0
+
+		got, cmd := m.updateKeys(newTestKeyMsg("G"))
+
+		assert.Equal(t, 1, got.(Model).cursor)
+		require.NotNil(t, cmd)
+	})
+
 	t.Run("volumes tab delegates other keys to updateVolumeKeys", func(t *testing.T) {
 		t.Parallel()
 
@@ -2991,6 +3045,21 @@ func TestSubtabs(t *testing.T) {
 		assert.Contains(t, gotView, "ENV")
 	})
 
+	t.Run("subEnv with an injected empty extra shows no env", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestSubtabModel(t)
+		m.rows = []row{{kind: rowContainer, key: "id:c1", container: Container{ID: "c1", State: "running"}}}
+		m.cursor = 0
+		m.subtab = subEnv
+		m.syncSubVP()
+
+		got, _ := m.Update(detailExtraMsg{id: "c1", extra: detailExtra{env: nil}})
+
+		gotView := got.(Model).View()
+		assert.Contains(t, gotView, "no env")
+	})
+
 	t.Run("subTop with data aligns columns and shows PROCESSES", func(t *testing.T) {
 		t.Parallel()
 
@@ -3249,6 +3318,36 @@ func TestDetailExtraCmdMounts(t *testing.T) {
 	got, ok := cmd().(detailExtraMsg)
 	require.True(t, ok)
 	assert.Equal(t, []string{"/host/path -> /data", "db-data -> /var/lib/data"}, got.extra.mounts)
+}
+
+func TestLazyExtraCmd(t *testing.T) {
+	t.Parallel()
+
+	t.Run("cursor out of bounds returns nil", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		m.subtab = subEnv
+		m.rows = []row{{kind: rowContainer, key: "id:c1", container: Container{ID: "c1"}}}
+		m.cursor = 1
+
+		cmd := m.lazyExtraCmd()
+
+		assert.Nil(t, cmd)
+	})
+
+	t.Run("non-container row returns nil", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		m.subtab = subEnv
+		m.rows = []row{{kind: rowStack, key: "stack:app", project: "app"}}
+		m.cursor = 0
+
+		cmd := m.lazyExtraCmd()
+
+		assert.Nil(t, cmd)
+	})
 }
 
 func (c *testResourceClientWithInspectErr) ContainerStats(ctx context.Context, containerID string, options client.ContainerStatsOptions) (client.ContainerStatsResult, error) {
