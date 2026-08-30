@@ -61,14 +61,23 @@ const (
 	focusLogs
 )
 
+type tabID int
+
 const (
-	tabContainers int = iota
+	tabContainers tabID = iota
 	tabVolumes
 	tabNetworks
 )
 
+type deleteKind int
+
+const (
+	deleteVolume deleteKind = iota
+	deleteNetwork
+)
+
 type pendingDelete struct {
-	kind  string
+	kind  deleteKind
 	id    string
 	label string
 }
@@ -94,7 +103,7 @@ type Model struct {
 	tmux      TmuxInfo
 	resources resourceClient
 
-	tab int
+	tab tabID
 
 	containers []Container
 	rows       []row
@@ -316,7 +325,7 @@ func (m Model) updateVolumeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		v := m.volumes[m.volCursor]
 		if volumeUsedBy(m.volumes, m.containers)[v.Name] == 0 {
-			m.confirm = &pendingDelete{kind: "volume", id: v.Name, label: v.Name}
+			m.confirm = &pendingDelete{kind: deleteVolume, id: v.Name, label: v.Name}
 		}
 		return m, nil
 	case "y":
@@ -356,7 +365,7 @@ func (m Model) updateNetworkKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		n := m.networks[m.netCursor]
 		if networkUsedBy(m.networks, m.containers)[n.Name] == 0 && !isBuiltinNetwork(n.Name) {
-			m.confirm = &pendingDelete{kind: "network", id: n.ID, label: n.Name}
+			m.confirm = &pendingDelete{kind: deleteNetwork, id: n.ID, label: n.Name}
 		}
 		return m, nil
 	case "y":
@@ -379,9 +388,9 @@ func (m Model) applyConfirm() (Model, tea.Cmd) {
 	return m, func() tea.Msg {
 		var err error
 		switch kind {
-		case "volume":
+		case deleteVolume:
 			_, err = resources.VolumeRemove(context.Background(), id, client.VolumeRemoveOptions{})
-		case "network":
+		case deleteNetwork:
 			_, err = resources.NetworkRemove(context.Background(), id, client.NetworkRemoveOptions{})
 		}
 		if err != nil {

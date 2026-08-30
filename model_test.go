@@ -235,7 +235,7 @@ func TestUpdateKeys(t *testing.T) {
 		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
 		m.focus = focusList
 		m.tab = tabVolumes
-		m.confirm = &pendingDelete{kind: "volume", id: "data"}
+		m.confirm = &pendingDelete{kind: deleteVolume, id: "data"}
 		m.rows = []row{{kind: rowContainer, key: "id:c1"}}
 
 		got, cmd := m.updateKeys(newTestKeyMsg("1"))
@@ -252,7 +252,7 @@ func TestUpdateKeys(t *testing.T) {
 		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
 		m.focus = focusList
 		m.tab = tabContainers
-		m.confirm = &pendingDelete{kind: "volume", id: "data"}
+		m.confirm = &pendingDelete{kind: deleteVolume, id: "data"}
 
 		got, cmd := m.updateKeys(newTestKeyMsg("2"))
 
@@ -268,7 +268,7 @@ func TestUpdateKeys(t *testing.T) {
 		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
 		m.focus = focusList
 		m.tab = tabContainers
-		m.confirm = &pendingDelete{kind: "network", id: "app-net"}
+		m.confirm = &pendingDelete{kind: deleteNetwork, id: "app-net"}
 
 		got, cmd := m.updateKeys(newTestKeyMsg("3"))
 
@@ -429,7 +429,7 @@ func TestUpdateVolumeKeys(t *testing.T) {
 			got, cmd := m.updateVolumeKeys(newTestKeyMsg("d"))
 
 			gotModel := got.(Model)
-			assert.Equal(t, &pendingDelete{kind: "volume", id: "data", label: "data"}, gotModel.confirm)
+			assert.Equal(t, &pendingDelete{kind: deleteVolume, id: "data", label: "data"}, gotModel.confirm)
 			assert.Nil(t, cmd)
 		})
 
@@ -453,7 +453,7 @@ func TestUpdateVolumeKeys(t *testing.T) {
 			m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
 			m.volumes = []Volume{{Name: "data"}}
 			m.volCursor = 0
-			m.confirm = &pendingDelete{kind: "volume", id: "other", label: "other"}
+			m.confirm = &pendingDelete{kind: deleteVolume, id: "other", label: "other"}
 
 			got, cmd := m.updateVolumeKeys(newTestKeyMsg("d"))
 
@@ -497,7 +497,7 @@ func TestUpdateVolumeKeys(t *testing.T) {
 				return client.VolumeRemoveResult{}, nil
 			})
 			m := newTestModel(newTestLogRetargeter(), resources)
-			m.confirm = &pendingDelete{kind: "volume", id: "data", label: "data"}
+			m.confirm = &pendingDelete{kind: deleteVolume, id: "data", label: "data"}
 
 			got, cmd := m.updateVolumeKeys(newTestKeyMsg("y"))
 
@@ -515,7 +515,7 @@ func TestUpdateVolumeKeys(t *testing.T) {
 				return client.VolumeRemoveResult{}, wantErr
 			})
 			m := newTestModel(newTestLogRetargeter(), resources)
-			m.confirm = &pendingDelete{kind: "volume", id: "data", label: "data"}
+			m.confirm = &pendingDelete{kind: deleteVolume, id: "data", label: "data"}
 
 			_, cmd := m.updateVolumeKeys(newTestKeyMsg("y"))
 
@@ -545,7 +545,7 @@ func TestUpdateVolumeKeys(t *testing.T) {
 				t.Parallel()
 
 				m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
-				m.confirm = &pendingDelete{kind: "volume", id: "data", label: "data"}
+				m.confirm = &pendingDelete{kind: deleteVolume, id: "data", label: "data"}
 
 				got, cmd := m.updateVolumeKeys(newTestKeyMsg(key))
 
@@ -691,7 +691,7 @@ func TestUpdateNetworkKeys(t *testing.T) {
 			got, cmd := m.updateNetworkKeys(newTestKeyMsg("d"))
 
 			gotModel := got.(Model)
-			assert.Equal(t, &pendingDelete{kind: "network", id: "n1", label: "app-net"}, gotModel.confirm)
+			assert.Equal(t, &pendingDelete{kind: deleteNetwork, id: "n1", label: "app-net"}, gotModel.confirm)
 			assert.Nil(t, cmd)
 		})
 
@@ -701,7 +701,7 @@ func TestUpdateNetworkKeys(t *testing.T) {
 			m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
 			m.networks = []Network{{ID: "n1", Name: "app-net", Driver: "bridge"}}
 			m.netCursor = 0
-			m.confirm = &pendingDelete{kind: "network", id: "other", label: "other"}
+			m.confirm = &pendingDelete{kind: deleteNetwork, id: "other", label: "other"}
 
 			got, cmd := m.updateNetworkKeys(newTestKeyMsg("d"))
 
@@ -730,7 +730,7 @@ func TestUpdateNetworkKeys(t *testing.T) {
 				t.Parallel()
 
 				m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
-				m.confirm = &pendingDelete{kind: "network", id: "n1", label: "app-net"}
+				m.confirm = &pendingDelete{kind: deleteNetwork, id: "n1", label: "app-net"}
 
 				got, cmd := m.updateNetworkKeys(newTestKeyMsg(key))
 
@@ -763,7 +763,7 @@ func TestUpdateNetworkKeys(t *testing.T) {
 			return client.NetworkRemoveResult{}, nil
 		}
 		m := newTestModel(newTestLogRetargeter(), resources)
-		m.confirm = &pendingDelete{kind: "network", id: "n1", label: "app-net"}
+		m.confirm = &pendingDelete{kind: deleteNetwork, id: "n1", label: "app-net"}
 
 		got, cmd := m.updateNetworkKeys(newTestKeyMsg("y"))
 
