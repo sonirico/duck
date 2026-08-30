@@ -2962,6 +2962,97 @@ func TestSubtabs(t *testing.T) {
 
 		assert.Contains(t, gotView, "[/] view")
 	})
+
+	t.Run("subEnv without a cached extra shows loading", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestSubtabModel(t)
+		m.rows = []row{{kind: rowContainer, key: "id:c1", container: Container{ID: "c1", State: "running"}}}
+		m.cursor = 0
+		m.subtab = subEnv
+		m.syncSubVP()
+
+		assert.Contains(t, m.View(), "loading...")
+	})
+
+	t.Run("subEnv with an injected extra shows the env var and the ENV header", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestSubtabModel(t)
+		m.rows = []row{{kind: rowContainer, key: "id:c1", container: Container{ID: "c1", State: "running"}}}
+		m.cursor = 0
+		m.subtab = subEnv
+		m.syncSubVP()
+
+		got, _ := m.Update(detailExtraMsg{id: "c1", extra: detailExtra{env: []string{"FOO=bar"}}})
+
+		gotView := got.(Model).View()
+		assert.Contains(t, gotView, "FOO=bar")
+		assert.Contains(t, gotView, "ENV")
+	})
+
+	t.Run("subTop with data aligns columns and shows PROCESSES", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestSubtabModel(t)
+		m.rows = []row{{kind: rowContainer, key: "id:c1", container: Container{ID: "c1", State: "running"}}}
+		m.cursor = 0
+		m.subtab = subTop
+		m.syncSubVP()
+		extra := detailExtra{titles: []string{"PID", "CMD"}, procs: [][]string{{"123", "nginx"}}}
+
+		got, _ := m.Update(detailExtraMsg{id: "c1", extra: extra})
+
+		gotView := got.(Model).View()
+		assert.Contains(t, gotView, "PROCESSES")
+		assert.Contains(t, gotView, "123")
+		assert.Contains(t, gotView, "nginx")
+	})
+
+	t.Run("subTop over a stopped container shows container not running", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestSubtabModel(t)
+		m.rows = []row{{kind: rowContainer, key: "id:c1", container: Container{ID: "c1", State: "exited"}}}
+		m.cursor = 0
+		m.subtab = subTop
+		m.syncSubVP()
+
+		assert.Contains(t, m.View(), "container not running")
+	})
+
+	t.Run("entering subEnv without a cached extra dispatches a fetch cmd", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestSubtabModel(t)
+		m.rows = []row{{kind: rowContainer, key: "id:c1", container: Container{ID: "c1", State: "running"}}}
+		m.cursor = 0
+
+		got, _ := m.updateKeys(newTestKeyMsg("]"))
+		m = got.(Model)
+		got, cmd := m.updateKeys(newTestKeyMsg("]"))
+		m = got.(Model)
+
+		assert.Equal(t, subEnv, m.subtab)
+		assert.NotNil(t, cmd)
+	})
+
+	t.Run("entering subEnv with a cached extra does not dispatch a fetch cmd", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestSubtabModel(t)
+		m.rows = []row{{kind: rowContainer, key: "id:c1", container: Container{ID: "c1", State: "running"}}}
+		m.cursor = 0
+		m.extras = map[string]detailExtra{"c1": {env: []string{"FOO=bar"}}}
+
+		got, _ := m.updateKeys(newTestKeyMsg("]"))
+		m = got.(Model)
+		got, cmd := m.updateKeys(newTestKeyMsg("]"))
+		m = got.(Model)
+
+		assert.Equal(t, subEnv, m.subtab)
+		assert.Nil(t, cmd)
+	})
 }
 
 type testResourceClientWithInspectErr struct {
@@ -3123,7 +3214,7 @@ func TestDetailExtraCmd(t *testing.T) {
 		wantErr := errors.New("inspect boom")
 		m := newTestModel(newTestLogRetargeter(), newTestResourceClientWithContainerInspectErr(wantErr))
 
-		cmd := m.detailExtraCmd("c1")
+		cmd := m.detailExtraCmd("c1", true)
 
 		require.NotNil(t, cmd)
 		assert.Equal(t, watcherErrMsg{err: wantErr}, cmd())
@@ -3135,7 +3226,7 @@ func TestDetailExtraCmd(t *testing.T) {
 		wantErr := errors.New("top boom")
 		m := newTestModel(newTestLogRetargeter(), newTestResourceClientWithContainerTopErr(wantErr))
 
-		cmd := m.detailExtraCmd("c1")
+		cmd := m.detailExtraCmd("c1", true)
 
 		require.NotNil(t, cmd)
 		assert.Equal(t, watcherErrMsg{err: wantErr}, cmd())
@@ -3152,7 +3243,7 @@ func TestDetailExtraCmdMounts(t *testing.T) {
 	}
 	m := newTestModel(newTestLogRetargeter(), client)
 
-	cmd := m.detailExtraCmd("c1")
+	cmd := m.detailExtraCmd("c1", true)
 
 	require.NotNil(t, cmd)
 	got, ok := cmd().(detailExtraMsg)

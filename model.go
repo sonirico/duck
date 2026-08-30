@@ -450,6 +450,7 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			m.subtab = kinds[idx]
 			m.syncSubVP()
+			return m, m.lazyExtraCmd()
 		}
 		return m, nil
 	}
@@ -542,28 +543,28 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.cursor++
 			m.clampSubtab()
 			m.syncSubVP()
-			return m, m.retarget()
+			return m, tea.Batch(m.retarget(), m.lazyExtraCmd())
 		}
 	case "k", "up":
 		if m.cursor > 0 {
 			m.cursor--
 			m.clampSubtab()
 			m.syncSubVP()
-			return m, m.retarget()
+			return m, tea.Batch(m.retarget(), m.lazyExtraCmd())
 		}
 	case "g":
 		if len(m.rows) > 0 && m.cursor != 0 {
 			m.cursor = 0
 			m.clampSubtab()
 			m.syncSubVP()
-			return m, m.retarget()
+			return m, tea.Batch(m.retarget(), m.lazyExtraCmd())
 		}
 	case "G":
 		if len(m.rows) > 0 && m.cursor != len(m.rows)-1 {
 			m.cursor = len(m.rows) - 1
 			m.clampSubtab()
 			m.syncSubVP()
-			return m, m.retarget()
+			return m, tea.Batch(m.retarget(), m.lazyExtraCmd())
 		}
 	case "enter":
 		if m.confirm == nil && m.cursor >= 0 && m.cursor < len(m.rows) {
@@ -576,7 +577,7 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			case rowContainer:
 				if r.container.State == "running" {
 					ids = []string{r.container.ID}
-					return m, tea.Batch(m.statsCmd(ids), m.detailExtraCmd(r.container.ID))
+					return m, tea.Batch(m.statsCmd(ids), m.detailExtraCmd(r.container.ID, true))
 				}
 			case rowStack:
 				for _, c := range m.containers {
@@ -678,7 +679,7 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.rows = newRows(m.filteredContainers())
 			m.clampSubtab()
 			m.syncSubVP()
-			return m, m.retarget()
+			return m, tea.Batch(m.retarget(), m.lazyExtraCmd())
 		}
 	}
 	return m, nil
@@ -1011,16 +1012,22 @@ func (m Model) statsCmd(ids []string) tea.Cmd {
 	}
 }
 
-func (m Model) detailExtraCmd(id string) tea.Cmd {
+func (m Model) detailExtraCmd(id string, running bool) tea.Cmd {
 	resources := m.resources
 	return func() tea.Msg {
 		res, err := resources.ContainerInspect(context.Background(), id, client.ContainerInspectOptions{})
 		if err != nil {
 			return watcherErrMsg{err: err}
 		}
-		top, err := resources.ContainerTop(context.Background(), id, client.ContainerTopOptions{})
-		if err != nil {
-			return watcherErrMsg{err: err}
+		var titles []string
+		var procs [][]string
+		if running {
+			top, err := resources.ContainerTop(context.Background(), id, client.ContainerTopOptions{})
+			if err != nil {
+				return watcherErrMsg{err: err}
+			}
+			titles = top.Titles
+			procs = top.Processes
 		}
 		var mounts []string
 		for _, mp := range res.Container.Mounts {
@@ -1031,7 +1038,7 @@ func (m Model) detailExtraCmd(id string) tea.Cmd {
 			mounts = append(mounts, entry)
 		}
 		sort.Strings(mounts)
-		return detailExtraMsg{id: id, extra: detailExtra{env: res.Container.Config.Env, titles: top.Titles, procs: top.Processes, mounts: mounts}}
+		return detailExtraMsg{id: id, extra: detailExtra{env: res.Container.Config.Env, titles: titles, procs: procs, mounts: mounts}}
 	}
 }
 
@@ -1049,10 +1056,31 @@ func (m *Model) syncSubVP() {
 		case rowContainer:
 			m.subVP.SetContent(m.renderContainerDetail(r.container))
 		}
-	case subEnv, subTop, subStats, subInspect:
+	case subEnv:
+		m.subVP.SetContent(m.renderEnvDetail(r.container))
+	case subTop:
+		m.subVP.SetContent(m.renderTopDetail(r.container))
+	case subStats, subInspect:
 		m.subVP.SetContent(m.renderContainerDetail(r.container))
 	case subLogs:
 	}
+}
+
+func (m Model) lazyExtraCmd() tea.Cmd {
+	if m.subtab != subEnv && m.subtab != subTop && m.subtab != subInspect {
+		return nil
+	}
+	if m.cursor < 0 || m.cursor >= len(m.rows) {
+		return nil
+	}
+	r := m.rows[m.cursor]
+	if r.kind != rowContainer {
+		return nil
+	}
+	if _, ok := m.extras[r.container.ID]; ok {
+		return nil
+	}
+	return m.detailExtraCmd(r.container.ID, r.container.State == "running")
 }
 
 func (m *Model) clampSubtab() {
@@ -1358,6 +1386,75 @@ func (m Model) renderContainerDetail(c Container) string {
 	writeSection("MOUNTS", mounts)
 	writeSection("NETWORKS", c.Networks)
 
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func (m Model) renderEnvDetail(c Container) string {
+	var b strings.Builder
+	b.WriteString(styleSection.Render("ENV") + "\n")
+
+	extra, ok := m.extras[c.ID]
+	if !ok {
+		b.WriteString(styleDim.Render("loading..."))
+		return b.String()
+	}
+	if len(extra.env) == 0 {
+		b.WriteString(styleDim.Render("no env"))
+		return b.String()
+	}
+	for _, e := range extra.env {
+		name := e
+		rest := ""
+		if idx := strings.Index(e, "="); idx >= 0 {
+			name = e[:idx]
+			rest = e[idx:]
+		}
+		b.WriteString(styleDim.Render(name) + rest + "\n")
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func (m Model) renderTopDetail(c Container) string {
+	var b strings.Builder
+	b.WriteString(styleSection.Render("PROCESSES") + "\n")
+
+	if c.State != "running" {
+		b.WriteString(styleDim.Render("container not running"))
+		return b.String()
+	}
+	extra, ok := m.extras[c.ID]
+	if !ok {
+		b.WriteString(styleDim.Render("loading..."))
+		return b.String()
+	}
+
+	widths := make([]int, len(extra.titles))
+	for i, title := range extra.titles {
+		widths[i] = len(title)
+	}
+	for _, proc := range extra.procs {
+		for i, cell := range proc {
+			if i < len(widths) && len(cell) > widths[i] {
+				widths[i] = len(cell)
+			}
+		}
+	}
+
+	writeRow := func(cells []string) string {
+		var row strings.Builder
+		for i, cell := range cells {
+			if i > 0 {
+				row.WriteString("  ")
+			}
+			row.WriteString(fmt.Sprintf("%-*s", widths[i], cell))
+		}
+		return row.String()
+	}
+
+	b.WriteString(styleDim.Render(writeRow(extra.titles)) + "\n")
+	for _, proc := range extra.procs {
+		b.WriteString(writeRow(proc) + "\n")
+	}
 	return strings.TrimRight(b.String(), "\n")
 }
 
