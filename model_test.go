@@ -2746,6 +2746,28 @@ func TestDetailView(t *testing.T) {
 		assert.Contains(t, gotModel.detail, "nginx")
 	})
 
+	t.Run("detailExtraMsg with a stack detail open re-renders the stack detail", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+		m = got.(Model)
+		rowCopy := row{kind: rowStack, key: "stack:app", project: "app"}
+		m.detailRow = &rowCopy
+		m.detail = m.renderStackDetail("app")
+		m.detailVP.SetContent(m.detail)
+		extra := detailExtra{
+			env:    []string{"FOO=bar"},
+			titles: []string{"PID", "CMD"},
+			procs:  [][]string{{"123", "nginx"}},
+		}
+
+		got, _ = m.Update(detailExtraMsg{id: "c1", extra: extra})
+
+		gotModel := got.(Model)
+		assert.Contains(t, gotModel.detail, "project: app")
+	})
+
 	t.Run("detailExtraMsg without detail open only merges extras without touching detail", func(t *testing.T) {
 		t.Parallel()
 
@@ -2770,6 +2792,7 @@ func TestDetailView(t *testing.T) {
 type testResourceClientWithInspectErr struct {
 	containerInspectErr error
 	imageInspectErr     error
+	containerTopErr     error
 	calls               []testResourceCall
 }
 
@@ -2779,6 +2802,10 @@ func newTestResourceClientWithContainerInspectErr(err error) *testResourceClient
 
 func newTestResourceClientWithImageInspectErr(err error) *testResourceClientWithInspectErr {
 	return &testResourceClientWithInspectErr{imageInspectErr: err}
+}
+
+func newTestResourceClientWithContainerTopErr(err error) *testResourceClientWithInspectErr {
+	return &testResourceClientWithInspectErr{containerTopErr: err}
 }
 
 func (c *testResourceClientWithInspectErr) VolumeRemove(ctx context.Context, volumeID string, options client.VolumeRemoveOptions) (client.VolumeRemoveResult, error) {
@@ -2912,11 +2939,42 @@ func TestStatsCmd(t *testing.T) {
 	})
 }
 
+func TestDetailExtraCmd(t *testing.T) {
+	t.Parallel()
+
+	t.Run("ContainerInspect error returns watcherErrMsg", func(t *testing.T) {
+		t.Parallel()
+
+		wantErr := errors.New("inspect boom")
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClientWithContainerInspectErr(wantErr))
+
+		cmd := m.detailExtraCmd("c1")
+
+		require.NotNil(t, cmd)
+		assert.Equal(t, watcherErrMsg{err: wantErr}, cmd())
+	})
+
+	t.Run("ContainerTop error returns watcherErrMsg", func(t *testing.T) {
+		t.Parallel()
+
+		wantErr := errors.New("top boom")
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClientWithContainerTopErr(wantErr))
+
+		cmd := m.detailExtraCmd("c1")
+
+		require.NotNil(t, cmd)
+		assert.Equal(t, watcherErrMsg{err: wantErr}, cmd())
+	})
+}
+
 func (c *testResourceClientWithInspectErr) ContainerStats(ctx context.Context, containerID string, options client.ContainerStatsOptions) (client.ContainerStatsResult, error) {
 	return client.ContainerStatsResult{Body: io.NopCloser(strings.NewReader("{}"))}, nil
 }
 
 func (c *testResourceClientWithInspectErr) ContainerTop(ctx context.Context, containerID string, options client.ContainerTopOptions) (client.ContainerTopResult, error) {
+	if c.containerTopErr != nil {
+		return client.ContainerTopResult{}, c.containerTopErr
+	}
 	return client.ContainerTopResult{}, nil
 }
 
