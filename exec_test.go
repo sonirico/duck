@@ -61,6 +61,8 @@ func TestNewExecArgv(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
 			got := newExecArgv(containerID, tc.dockerHost, tc.tmux)
 
 			assert.Equal(t, tc.want, got)
@@ -130,6 +132,8 @@ func TestNewTmuxInfo(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
 			got := NewTmuxInfo(tc.env, tc.look, tc.version)
 
 			assert.Equal(t, tc.want, got)
