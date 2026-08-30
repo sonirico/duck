@@ -32,7 +32,10 @@ func NewTmuxInfo(env func(string) string, look func(string) (string, error), ver
 		return TmuxInfo{}
 	}
 	var major, minor int
-	fmt.Sscanf(fields[1], "%d.%d", &major, &minor)
+	n, err := fmt.Sscanf(fields[1], "%d.%d", &major, &minor)
+	if err != nil || n != 2 {
+		return TmuxInfo{}
+	}
 
 	return TmuxInfo{Present: true, Major: major, Minor: minor, Pane: env("TMUX_PANE")}
 }
