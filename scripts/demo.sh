@@ -18,12 +18,18 @@ demo_down() {
   if [ -n "$names" ]; then
     echo "$names" | xargs -r docker rm -f >/dev/null
   fi
+  docker network rm duck-demo-net >/dev/null 2>&1 || true
+  docker volume rm duck-demo-data >/dev/null 2>&1 || true
 }
 
 demo_up() {
   demo_down
 
+  docker network create duck-demo-net >/dev/null
+  docker volume create duck-demo-data >/dev/null
+
   docker run -d --rm --name duck-demo-webshop-api \
+    --network duck-demo-net \
     --label com.docker.compose.project=webshop \
     --label com.docker.compose.service=api \
     alpine sh -c '
@@ -51,6 +57,7 @@ demo_up() {
       done' >/dev/null
 
   docker run -d --rm --name duck-demo-webshop-cache \
+    --volume duck-demo-data:/data \
     --label com.docker.compose.project=webshop \
     --label com.docker.compose.service=cache \
     alpine sh -c '

@@ -32,5 +32,20 @@ Sleep 2s
 Type "g"
 Sleep 2s
 
+Type "2"
+Sleep 2s
+
+Type "j"
+Sleep 2s
+
+Type "3"
+Sleep 2s
+
+Type "j"
+Sleep 2s
+
+Type "1"
+Sleep 2s
+
 Type "q"
 Sleep 1s
