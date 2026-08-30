@@ -14,6 +14,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/image"
+	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/client"
 )
 
@@ -30,6 +31,7 @@ var (
 	styleDotStopped = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
 	styleDim        = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 	styleErr        = lipgloss.NewStyle().Foreground(lipgloss.Color("1")).Bold(true)
+	styleSection    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("6"))
 
 	sourcePalette = []lipgloss.Style{
 		lipgloss.NewStyle().Foreground(lipgloss.Color("2")),
@@ -160,6 +162,7 @@ type detailExtra struct {
 	env    []string
 	titles []string
 	procs  [][]string
+	mounts []string
 }
 
 type detailExtraMsg struct {
@@ -1019,7 +1022,16 @@ func (m Model) detailExtraCmd(id string) tea.Cmd {
 		if err != nil {
 			return watcherErrMsg{err: err}
 		}
-		return detailExtraMsg{id: id, extra: detailExtra{env: res.Container.Config.Env, titles: top.Titles, procs: top.Processes}}
+		var mounts []string
+		for _, mp := range res.Container.Mounts {
+			entry := mp.Source + " -> " + mp.Destination
+			if mp.Type == mount.TypeVolume {
+				entry = mp.Name + " -> " + mp.Destination
+			}
+			mounts = append(mounts, entry)
+		}
+		sort.Strings(mounts)
+		return detailExtraMsg{id: id, extra: detailExtra{env: res.Container.Config.Env, titles: top.Titles, procs: top.Processes, mounts: mounts}}
 	}
 }
 
@@ -1302,57 +1314,49 @@ func (m Model) renderList() string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
+func renderKV(label, value string) string {
+	return styleDim.Render(fmt.Sprintf("%-9s", label)) + " " + value
+}
+
 func (m Model) renderContainerDetail(c Container) string {
-	var b strings.Builder
-	b.WriteString("name: " + c.Name + "\n")
-	b.WriteString("image: " + c.Image + "\n")
-	b.WriteString("state: " + c.State + "\n")
-	b.WriteString("status: " + c.Status + "\n")
-	if s, ok := m.stats[c.ID]; ok {
-		b.WriteString("cpu: " + fmt.Sprintf("%.1f%%", s.CPUPercent) + "\n")
-		b.WriteString("mem: " + formatMemBytes(s.MemUsage) + " / " + formatMemBytes(s.MemLimit) + "\n")
+	dot := styleDotStopped.Render("●")
+	if c.State == "running" {
+		dot = styleDotRunning.Render("●")
 	}
+
+	var b strings.Builder
+	b.WriteString(renderKV("name:", c.Name) + "\n")
+	b.WriteString(renderKV("image:", c.Image) + "\n")
+	b.WriteString(renderKV("state:", dot+" "+c.State) + "\n")
+	b.WriteString(renderKV("status:", c.Status) + "\n")
 	if c.Project != "" {
-		b.WriteString("project: " + c.Project + "\n")
+		b.WriteString(renderKV("project:", c.Project) + "\n")
 	}
 	if c.Service != "" {
-		b.WriteString("service: " + c.Service + "\n")
+		b.WriteString(renderKV("service:", c.Service) + "\n")
+	}
+	if s, ok := m.stats[c.ID]; ok {
+		b.WriteString(renderKV("cpu:", fmt.Sprintf("%.1f%%", s.CPUPercent)) + "\n")
+		b.WriteString(renderKV("mem:", formatMemBytes(s.MemUsage)+" / "+formatMemBytes(s.MemLimit)) + "\n")
 	}
 
-	if len(c.Ports) > 0 {
-		b.WriteString("ports:\n")
-		for _, p := range c.Ports {
-			b.WriteString("  " + p + "\n")
-		}
-	}
-	if len(c.Volumes) > 0 {
-		b.WriteString("volumes:\n")
-		for _, v := range c.Volumes {
-			b.WriteString("  " + v + "\n")
-		}
-	}
-	if len(c.Networks) > 0 {
-		b.WriteString("networks:\n")
-		for _, n := range c.Networks {
-			b.WriteString("  " + n + "\n")
-		}
+	mounts := c.Volumes
+	if extra, ok := m.extras[c.ID]; ok && len(extra.mounts) > 0 {
+		mounts = extra.mounts
 	}
 
-	if extra, ok := m.extras[c.ID]; ok {
-		if len(extra.env) > 0 {
-			b.WriteString("env:\n")
-			for _, e := range extra.env {
-				b.WriteString("  " + e + "\n")
-			}
+	writeSection := func(title string, entries []string) {
+		if len(entries) == 0 {
+			return
 		}
-		if len(extra.procs) > 0 {
-			b.WriteString("top:\n")
-			b.WriteString("  " + strings.Join(extra.titles, "  ") + "\n")
-			for _, p := range extra.procs {
-				b.WriteString("  " + strings.Join(p, "  ") + "\n")
-			}
+		b.WriteString("\n" + styleSection.Render(title) + "\n")
+		for _, e := range entries {
+			b.WriteString("  " + e + "\n")
 		}
 	}
+	writeSection("PORTS", c.Ports)
+	writeSection("MOUNTS", mounts)
+	writeSection("NETWORKS", c.Networks)
 
 	return strings.TrimRight(b.String(), "\n")
 }
@@ -1364,7 +1368,7 @@ func (m Model) renderStackDetail(project string) string {
 	}
 
 	var b strings.Builder
-	b.WriteString("project: " + name + "\n")
+	b.WriteString(renderKV("project:", name) + "\n")
 
 	var stackContainers []Container
 	for _, c := range m.containers {
@@ -1373,7 +1377,7 @@ func (m Model) renderStackDetail(project string) string {
 		}
 	}
 
-	b.WriteString("services:\n")
+	b.WriteString("\n" + styleSection.Render("SERVICES") + "\n")
 	for _, c := range stackContainers {
 		dot := styleDotStopped.Render("●")
 		if c.State == "running" {
@@ -1414,14 +1418,14 @@ func (m Model) renderStackDetail(project string) string {
 			entries = append(entries, e)
 		}
 		sort.Strings(entries)
-		b.WriteString(title + "\n")
+		b.WriteString("\n" + styleSection.Render(title) + "\n")
 		for _, e := range entries {
 			b.WriteString("  " + e + "\n")
 		}
 	}
-	writeSet("ports:", ports)
-	writeSet("volumes:", volumes)
-	writeSet("networks:", networks)
+	writeSet("PORTS", ports)
+	writeSet("VOLUMES", volumes)
+	writeSet("NETWORKS", networks)
 
 	return strings.TrimRight(b.String(), "\n")
 }

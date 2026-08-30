@@ -2461,10 +2461,10 @@ func TestDetailView(t *testing.T) {
 		assert.Contains(t, detail, "web")
 		assert.Contains(t, detail, "nginx:latest")
 		assert.Contains(t, detail, "80:8080/tcp")
-		assert.Contains(t, detail, "project: app")
-		assert.Contains(t, detail, "service: web")
-		assert.Contains(t, detail, "volumes:")
-		assert.Contains(t, detail, "networks:")
+		assert.Contains(t, detail, renderKV("project:", "app"))
+		assert.Contains(t, detail, renderKV("service:", "web"))
+		assert.Contains(t, detail, "MOUNTS")
+		assert.Contains(t, detail, "NETWORKS")
 		assert.Contains(t, detail, "app_net")
 	})
 
@@ -2489,13 +2489,13 @@ func TestDetailView(t *testing.T) {
 		got2 := gotModel.(Model)
 		assert.Equal(t, subInfo, got2.subtab)
 		detail := got2.subVP.View()
-		assert.Contains(t, detail, "services:")
+		assert.Contains(t, detail, "SERVICES")
 		assert.Contains(t, detail, "web")
 		assert.Contains(t, detail, "app_db_1")
 		assert.Contains(t, detail, "data")
 		assert.Contains(t, detail, "db-data")
 		assert.Contains(t, detail, "app_net")
-		assert.Contains(t, detail, "ports:")
+		assert.Contains(t, detail, "PORTS")
 		assert.Contains(t, detail, "80:8080/tcp")
 	})
 
@@ -2515,7 +2515,7 @@ func TestDetailView(t *testing.T) {
 
 		assert.Nil(t, cmd)
 		detail := gotModel.(Model).subVP.View()
-		assert.Contains(t, detail, "project: standalone")
+		assert.Contains(t, detail, renderKV("project:", "standalone"))
 	})
 
 	t.Run("statsMsg for a stack row's info subtab includes per-container cpu and mem", func(t *testing.T) {
@@ -2749,7 +2749,7 @@ func TestDetailView(t *testing.T) {
 		assert.Equal(t, ContainerStat{ID: "c1", CPUPercent: 20.0, MemUsage: 1024, MemLimit: 4096}, gotModel.stats["c1"])
 	})
 
-	t.Run("detailExtraMsg with the info subtab open re-renders it with env and top", func(t *testing.T) {
+	t.Run("detailExtraMsg with the info subtab open does not render env or top", func(t *testing.T) {
 		t.Parallel()
 
 		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
@@ -2770,10 +2770,46 @@ func TestDetailView(t *testing.T) {
 
 		gotModel := got.(Model)
 		detail := gotModel.subVP.View()
-		assert.Contains(t, detail, "env:")
-		assert.Contains(t, detail, "top:")
-		assert.Contains(t, detail, "FOO=bar")
-		assert.Contains(t, detail, "nginx")
+		assert.NotContains(t, detail, "env:")
+		assert.NotContains(t, detail, "top:")
+		assert.NotContains(t, detail, "FOO=bar")
+	})
+
+	t.Run("container detail MOUNTS section uses extra.mounts when present", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+		m = got.(Model)
+		c := Container{ID: "c1", Name: "web", State: "running", Volumes: []string{"data"}}
+		m.rows = []row{{kind: rowContainer, key: "id:c1", container: c}}
+		m.cursor = 0
+		m.subtab = subInfo
+		m.syncSubVP()
+		extra := detailExtra{mounts: []string{"data -> /var/lib/data"}}
+
+		got, _ = m.Update(detailExtraMsg{id: "c1", extra: extra})
+
+		detail := got.(Model).subVP.View()
+		assert.Contains(t, detail, "MOUNTS")
+		assert.Contains(t, detail, "data -> /var/lib/data")
+	})
+
+	t.Run("container detail MOUNTS section falls back to c.Volumes without extra", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+		m = got.(Model)
+		c := Container{ID: "c1", Name: "web", State: "running", Volumes: []string{"data"}}
+		m.rows = []row{{kind: rowContainer, key: "id:c1", container: c}}
+		m.cursor = 0
+		m.subtab = subInfo
+		m.syncSubVP()
+
+		detail := m.subVP.View()
+		assert.Contains(t, detail, "MOUNTS")
+		assert.Contains(t, detail, "data")
 	})
 
 	t.Run("detailExtraMsg with a stack's info subtab open re-renders the stack detail", func(t *testing.T) {
@@ -2795,7 +2831,7 @@ func TestDetailView(t *testing.T) {
 		got, _ = m.Update(detailExtraMsg{id: "c1", extra: extra})
 
 		gotModel := got.(Model)
-		assert.Contains(t, gotModel.subVP.View(), "project: app")
+		assert.Contains(t, gotModel.subVP.View(), renderKV("project:", "app"))
 	})
 
 	t.Run("detailExtraMsg with the logs subtab open only merges extras without touching the subtab", func(t *testing.T) {
