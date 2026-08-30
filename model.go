@@ -57,6 +57,48 @@ type row struct {
 	container Container
 }
 
+type subtabID int
+
+const (
+	subLogs subtabID = iota
+	subInfo
+	subEnv
+	subTop
+	subStats
+	subInspect
+)
+
+func subtabsFor(kind rowKind) []subtabID {
+	switch kind {
+	case rowContainer:
+		return []subtabID{subLogs, subInfo, subEnv, subTop, subStats, subInspect}
+	case rowStack:
+		return []subtabID{subLogs, subInfo}
+	}
+	return nil
+}
+
+func renderSubtabBar(sel subtabID, kinds []subtabID) string {
+	labels := map[subtabID]string{
+		subLogs:    "logs",
+		subInfo:    "info",
+		subEnv:     "env",
+		subTop:     "top",
+		subStats:   "stats",
+		subInspect: "inspect",
+	}
+	parts := make([]string, len(kinds))
+	for i, k := range kinds {
+		label := labels[k]
+		if k == sel {
+			parts[i] = styleSelected.Render(" " + label + " ")
+		} else {
+			parts[i] = styleDim.Render(label)
+		}
+	}
+	return strings.Join(parts, "  ")
+}
+
 type focusArea int
 
 const (
@@ -186,11 +228,10 @@ type Model struct {
 	compose   string
 	composeVP viewport.Model
 
-	detail    string
-	detailVP  viewport.Model
-	detailRow *row
-	stats     map[string]ContainerStat
-	extras    map[string]detailExtra
+	subtab subtabID
+	subVP  viewport.Model
+	stats  map[string]ContainerStat
+	extras map[string]detailExtra
 
 	width  int
 	height int
@@ -215,8 +256,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport.SetContent(m.renderLogs())
 		m.composeVP.Width = m.logsWidth()
 		m.composeVP.Height = m.panesHeight()
-		m.detailVP.Width = m.logsWidth()
-		m.detailVP.Height = m.panesHeight()
+		m.subVP.Width = m.logsWidth()
+		m.subVP.Height = m.panesHeight()
+		m.syncSubVP()
 		return m, nil
 
 	case containersMsg:
@@ -224,6 +266,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.containers = msg.containers
 		m.rows = newRows(m.filteredContainers())
 		m.cursor = indexOfKey(m.rows, prevKey)
+		m.syncSubVP()
 		if prevKey == "" || m.selectedKey() != prevKey {
 			return m, m.retarget()
 		}
@@ -270,15 +313,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		for _, s := range msg.stats {
 			m.stats[s.ID] = s
 		}
-		if m.detailRow != nil {
-			switch m.detailRow.kind {
-			case rowStack:
-				m.detail = m.renderStackDetail(m.detailRow.project)
-			case rowContainer:
-				m.detail = m.renderContainerDetail(m.detailRow.container)
-			}
-			m.detailVP.SetContent(m.detail)
-		}
+		m.syncSubVP()
 		return m, nil
 
 	case detailExtraMsg:
@@ -286,15 +321,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.extras = make(map[string]detailExtra)
 		}
 		m.extras[msg.id] = msg.extra
-		if m.detailRow != nil {
-			switch m.detailRow.kind {
-			case rowStack:
-				m.detail = m.renderStackDetail(m.detailRow.project)
-			case rowContainer:
-				m.detail = m.renderContainerDetail(m.detailRow.container)
-			}
-			m.detailVP.SetContent(m.detail)
-		}
+		m.syncSubVP()
 		return m, nil
 
 	case composeMsg:
@@ -358,17 +385,6 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
-	if m.detail != "" {
-		if msg.String() == "esc" {
-			m.detail = ""
-			m.detailRow = nil
-			return m, nil
-		}
-		var cmd tea.Cmd
-		m.detailVP, cmd = m.detailVP.Update(msg)
-		return m, cmd
-	}
-
 	if m.filtering {
 		var cmd tea.Cmd
 		switch msg.String() {
@@ -412,6 +428,27 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, cmd
+	}
+
+	if (msg.String() == "]" || msg.String() == "[") && m.tab == tabContainers && m.confirm == nil {
+		if m.cursor >= 0 && m.cursor < len(m.rows) {
+			kinds := subtabsFor(m.rows[m.cursor].kind)
+			idx := 0
+			for i, k := range kinds {
+				if k == m.subtab {
+					idx = i
+					break
+				}
+			}
+			if msg.String() == "]" {
+				idx = (idx + 1) % len(kinds)
+			} else {
+				idx = (idx - 1 + len(kinds)) % len(kinds)
+			}
+			m.subtab = kinds[idx]
+			m.syncSubVP()
+		}
+		return m, nil
 	}
 
 	if m.focus == focusList {
@@ -467,6 +504,19 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	if m.focus == focusLogs {
+		if m.tab == tabContainers && m.subtab != subLogs {
+			switch msg.String() {
+			case "G":
+				m.subVP.GotoBottom()
+				return m, nil
+			case "g":
+				m.subVP.GotoTop()
+				return m, nil
+			}
+			var cmd tea.Cmd
+			m.subVP, cmd = m.subVP.Update(msg)
+			return m, cmd
+		}
 		switch msg.String() {
 		case "G":
 			m.follow = true
@@ -487,36 +537,37 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "j", "down":
 		if m.cursor < len(m.rows)-1 {
 			m.cursor++
+			m.clampSubtab()
+			m.syncSubVP()
 			return m, m.retarget()
 		}
 	case "k", "up":
 		if m.cursor > 0 {
 			m.cursor--
+			m.clampSubtab()
+			m.syncSubVP()
 			return m, m.retarget()
 		}
 	case "g":
 		if len(m.rows) > 0 && m.cursor != 0 {
 			m.cursor = 0
+			m.clampSubtab()
+			m.syncSubVP()
 			return m, m.retarget()
 		}
 	case "G":
 		if len(m.rows) > 0 && m.cursor != len(m.rows)-1 {
 			m.cursor = len(m.rows) - 1
+			m.clampSubtab()
+			m.syncSubVP()
 			return m, m.retarget()
 		}
 	case "enter":
 		if m.confirm == nil && m.cursor >= 0 && m.cursor < len(m.rows) {
 			r := m.rows[m.cursor]
-			switch r.kind {
-			case rowStack:
-				m.detail = m.renderStackDetail(r.project)
-			case rowContainer:
-				m.detail = m.renderContainerDetail(r.container)
-			}
-			m.detailVP.SetContent(m.detail)
-			m.detailVP.GotoTop()
-			rowCopy := r
-			m.detailRow = &rowCopy
+			m.subtab = subInfo
+			m.syncSubVP()
+			m.subVP.GotoTop()
 			var ids []string
 			switch r.kind {
 			case rowContainer:
@@ -612,6 +663,9 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "n", "esc":
 		if m.confirm != nil {
 			m.confirm = nil
+		} else if msg.String() == "esc" && m.subtab != subLogs {
+			m.subtab = subLogs
+			m.syncSubVP()
 		} else if m.filter != "" {
 			m.filter = ""
 			m.cursor = 0
@@ -619,6 +673,8 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.netCursor = 0
 			m.imgCursor = 0
 			m.rows = newRows(m.filteredContainers())
+			m.clampSubtab()
+			m.syncSubVP()
 			return m, m.retarget()
 		}
 	}
@@ -967,6 +1023,38 @@ func (m Model) detailExtraCmd(id string) tea.Cmd {
 	}
 }
 
+func (m *Model) syncSubVP() {
+	if m.cursor < 0 || m.cursor >= len(m.rows) {
+		m.subVP.SetContent("")
+		return
+	}
+	r := m.rows[m.cursor]
+	switch m.subtab {
+	case subInfo:
+		switch r.kind {
+		case rowStack:
+			m.subVP.SetContent(m.renderStackDetail(r.project))
+		case rowContainer:
+			m.subVP.SetContent(m.renderContainerDetail(r.container))
+		}
+	case subEnv, subTop, subStats, subInspect:
+		m.subVP.SetContent(m.renderContainerDetail(r.container))
+	case subLogs:
+	}
+}
+
+func (m *Model) clampSubtab() {
+	if m.cursor < 0 || m.cursor >= len(m.rows) {
+		return
+	}
+	for _, k := range subtabsFor(m.rows[m.cursor].kind) {
+		if k == m.subtab {
+			return
+		}
+	}
+	m.subtab = subInfo
+}
+
 func (m Model) selectedKey() string {
 	if m.cursor < 0 || m.cursor >= len(m.rows) {
 		return ""
@@ -1078,10 +1166,10 @@ func (m Model) View() string {
 	} else if m.tab == tabImages {
 		list = m.renderImageList()
 		rightContent = m.renderImageDetail()
-	} else if m.detail != "" {
-		rightContent = m.detailVP.View()
 	} else if m.compose != "" {
 		rightContent = m.composeVP.View()
+	} else if m.subtab != subLogs {
+		rightContent = m.subVP.View()
 	}
 	left := m.paneStyle(focusList).Width(m.listWidth()).Height(m.panesHeight()).Render(list)
 	right := m.paneStyle(focusLogs).Width(m.logsWidth()).Height(m.panesHeight()).Render(rightContent)
@@ -1090,15 +1178,13 @@ func (m Model) View() string {
 	if m.err != nil {
 		header += "  " + styleErr.Render("error: "+m.err.Error())
 	}
-	title := " logs"
-	if m.logTitle != "" {
-		title = " logs: " + m.logTitle
+	kinds := subtabsFor(rowContainer)
+	if m.cursor >= 0 && m.cursor < len(m.rows) {
+		kinds = subtabsFor(m.rows[m.cursor].kind)
 	}
+	title := " " + renderSubtabBar(m.subtab, kinds)
 	if m.tab == tabContainers && m.compose != "" {
 		title = " compose"
-	}
-	if m.tab == tabContainers && m.detail != "" {
-		title = " detail"
 	}
 	leftTitle := " containers"
 	if m.tab == tabVolumes {
@@ -1151,10 +1237,10 @@ func (m Model) View() string {
 			}
 		}
 		footer = resourceFooter(m.confirm, hint)
-	} else if m.tab == tabContainers && m.detail != "" {
-		footer = " j/k scroll  g/G top/bottom  esc back  q quit"
 	} else if m.tab == tabContainers && m.compose != "" {
 		footer = " j/k scroll  g/G top/bottom  esc back  q quit"
+	} else if m.tab == tabContainers && m.subtab != subLogs {
+		footer = " [/] view  j/k scroll  esc logs  q quit"
 	} else if m.confirm != nil {
 		footer = resourceFooter(m.confirm, "")
 	} else {

@@ -2431,7 +2431,7 @@ func TestComposeKey(t *testing.T) {
 func TestDetailView(t *testing.T) {
 	t.Parallel()
 
-	t.Run("enter over a container row fills detail with its fields", func(t *testing.T) {
+	t.Run("enter over a container row fills the info subtab with its fields", func(t *testing.T) {
 		t.Parallel()
 
 		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
@@ -2455,7 +2455,9 @@ func TestDetailView(t *testing.T) {
 		gotModel, cmd := m.updateKeys(newTestKeyMsg("enter"))
 
 		assert.Nil(t, cmd)
-		detail := gotModel.(Model).detail
+		got2 := gotModel.(Model)
+		assert.Equal(t, subInfo, got2.subtab)
+		detail := got2.subVP.View()
 		assert.Contains(t, detail, "web")
 		assert.Contains(t, detail, "nginx:latest")
 		assert.Contains(t, detail, "80:8080/tcp")
@@ -2466,7 +2468,7 @@ func TestDetailView(t *testing.T) {
 		assert.Contains(t, detail, "app_net")
 	})
 
-	t.Run("enter over a stack row fills detail with services and aggregated volumes/networks", func(t *testing.T) {
+	t.Run("enter over a stack row fills the info subtab with services and aggregated volumes/networks", func(t *testing.T) {
 		t.Parallel()
 
 		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
@@ -2484,7 +2486,9 @@ func TestDetailView(t *testing.T) {
 		gotModel, cmd := m.updateKeys(newTestKeyMsg("enter"))
 
 		assert.NotNil(t, cmd)
-		detail := gotModel.(Model).detail
+		got2 := gotModel.(Model)
+		assert.Equal(t, subInfo, got2.subtab)
+		detail := got2.subVP.View()
 		assert.Contains(t, detail, "services:")
 		assert.Contains(t, detail, "web")
 		assert.Contains(t, detail, "app_db_1")
@@ -2510,11 +2514,11 @@ func TestDetailView(t *testing.T) {
 		gotModel, cmd := m.updateKeys(newTestKeyMsg("enter"))
 
 		assert.Nil(t, cmd)
-		detail := gotModel.(Model).detail
+		detail := gotModel.(Model).subVP.View()
 		assert.Contains(t, detail, "project: standalone")
 	})
 
-	t.Run("statsMsg for a stack row's detail includes per-container cpu and mem", func(t *testing.T) {
+	t.Run("statsMsg for a stack row's info subtab includes per-container cpu and mem", func(t *testing.T) {
 		t.Parallel()
 
 		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
@@ -2530,51 +2534,56 @@ func TestDetailView(t *testing.T) {
 		m = gotModel.(Model)
 		gotModel, _ = m.Update(statsMsg{stats: []ContainerStat{{ID: "c1", CPUPercent: 12.3, MemUsage: 1024, MemLimit: 4096}}})
 
-		detail := gotModel.(Model).detail
+		detail := gotModel.(Model).subVP.View()
 		assert.Contains(t, detail, "cpu 12.3%")
 		assert.Contains(t, detail, "mem "+formatMemBytes(1024))
 	})
 
-	t.Run("detail active shows the detail title and scroll footer, esc returns to logs", func(t *testing.T) {
+	t.Run("info subtab active shows the subtab title and scroll footer, esc returns to logs", func(t *testing.T) {
 		t.Parallel()
 
 		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
 		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
 		m = got.(Model)
 		m.tab = tabContainers
-		m.detail = "name: web\n"
-		m.detailVP.SetContent(m.detail)
+		m.rows = []row{{kind: rowContainer, key: "id:c1", container: Container{ID: "c1", Name: "web"}}}
+		m.cursor = 0
+		m.subtab = subInfo
+		m.syncSubVP()
 
 		gotView := m.View()
 
-		assert.Contains(t, gotView, " detail")
-		assert.Contains(t, gotView, "j/k scroll  g/G top/bottom  esc back  q quit")
+		assert.Contains(t, gotView, "info")
+		assert.Contains(t, gotView, "[/] view  j/k scroll  esc logs  q quit")
 
 		got, cmd := m.updateKeys(newTestKeyMsg("esc"))
 
 		gotModel := got.(Model)
-		assert.Equal(t, "", gotModel.detail)
+		assert.Equal(t, subLogs, gotModel.subtab)
 		assert.Nil(t, cmd)
 		assert.Contains(t, gotModel.View(), " logs")
 	})
 
-	t.Run("non-esc key while detail active is forwarded to the detail viewport", func(t *testing.T) {
+	t.Run("non-esc key while a subtab is active and logs are focused is forwarded to the subtab viewport", func(t *testing.T) {
 		t.Parallel()
 
 		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
 		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
 		m = got.(Model)
 		m.tab = tabContainers
-		m.detail = "name: web\n"
-		m.detailVP.SetContent(m.detail)
+		m.focus = focusLogs
+		m.rows = []row{{kind: rowContainer, key: "id:c1", container: Container{ID: "c1", Name: "web"}}}
+		m.cursor = 0
+		m.subtab = subInfo
+		m.syncSubVP()
 
 		got, _ = m.updateKeys(newTestKeyMsg("down"))
 
 		gotModel := got.(Model)
-		assert.Equal(t, "name: web\n", gotModel.detail)
+		assert.Equal(t, subInfo, gotModel.subtab)
 	})
 
-	t.Run("enter with a pending confirm does not assign detail", func(t *testing.T) {
+	t.Run("enter with a pending confirm does not switch subtabs", func(t *testing.T) {
 		t.Parallel()
 
 		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
@@ -2586,7 +2595,7 @@ func TestDetailView(t *testing.T) {
 
 		gotModel, cmd := m.updateKeys(newTestKeyMsg("enter"))
 
-		assert.Equal(t, "", gotModel.(Model).detail)
+		assert.Equal(t, subLogs, gotModel.(Model).subtab)
 		assert.Nil(t, cmd)
 	})
 
@@ -2689,68 +2698,68 @@ func TestDetailView(t *testing.T) {
 		assert.Nil(t, cmd)
 	})
 
-	t.Run("esc clears the detail row", func(t *testing.T) {
+	t.Run("esc returns the subtab to logs", func(t *testing.T) {
 		t.Parallel()
 
 		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
 		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
 		m = got.(Model)
 		m.tab = tabContainers
-		m.detail = "name: web\n"
-		m.detailVP.SetContent(m.detail)
-		rowCopy := row{kind: rowContainer, key: "id:c1", container: Container{ID: "c1"}}
-		m.detailRow = &rowCopy
+		m.rows = []row{{kind: rowContainer, key: "id:c1", container: Container{ID: "c1"}}}
+		m.cursor = 0
+		m.subtab = subInfo
+		m.syncSubVP()
 
 		got, _ = m.updateKeys(newTestKeyMsg("esc"))
 
-		assert.Nil(t, got.(Model).detailRow)
+		assert.Equal(t, subLogs, got.(Model).subtab)
 	})
 
-	t.Run("statsMsg with detail open re-renders the detail with cpu and mem", func(t *testing.T) {
+	t.Run("statsMsg with the info subtab open re-renders it with cpu and mem", func(t *testing.T) {
 		t.Parallel()
 
 		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
 		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
 		m = got.(Model)
 		c := Container{ID: "c1", Name: "web", State: "running"}
-		rowCopy := row{kind: rowContainer, key: "id:c1", container: c}
-		m.detailRow = &rowCopy
-		m.detail = m.renderContainerDetail(c)
-		m.detailVP.SetContent(m.detail)
+		m.rows = []row{{kind: rowContainer, key: "id:c1", container: c}}
+		m.cursor = 0
+		m.subtab = subInfo
+		m.syncSubVP()
 
 		got, _ = m.Update(statsMsg{stats: []ContainerStat{{ID: "c1", CPUPercent: 20.0, MemUsage: 1024, MemLimit: 4096}}})
 
 		gotModel := got.(Model)
-		assert.Contains(t, gotModel.detail, "cpu: ")
-		assert.Contains(t, gotModel.detail, "mem: ")
+		detail := gotModel.subVP.View()
+		assert.Contains(t, detail, "cpu: ")
+		assert.Contains(t, detail, "mem: ")
 	})
 
-	t.Run("statsMsg without detail open only merges stats without touching detail", func(t *testing.T) {
+	t.Run("statsMsg with the logs subtab open only merges stats without touching the subtab", func(t *testing.T) {
 		t.Parallel()
 
 		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
 		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
 		m = got.(Model)
-		m.detail = ""
 
 		got, _ = m.Update(statsMsg{stats: []ContainerStat{{ID: "c1", CPUPercent: 20.0, MemUsage: 1024, MemLimit: 4096}}})
 
 		gotModel := got.(Model)
-		assert.Equal(t, "", gotModel.detail)
+		assert.Equal(t, subLogs, gotModel.subtab)
 		assert.Equal(t, ContainerStat{ID: "c1", CPUPercent: 20.0, MemUsage: 1024, MemLimit: 4096}, gotModel.stats["c1"])
 	})
 
-	t.Run("detailExtraMsg with detail open re-renders the detail with env and top", func(t *testing.T) {
+	t.Run("detailExtraMsg with the info subtab open re-renders it with env and top", func(t *testing.T) {
 		t.Parallel()
 
 		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
 		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
 		m = got.(Model)
 		c := Container{ID: "c1", Name: "web", State: "running"}
-		rowCopy := row{kind: rowContainer, key: "id:c1", container: c}
-		m.detailRow = &rowCopy
-		m.detail = m.renderContainerDetail(c)
-		m.detailVP.SetContent(m.detail)
+		m.rows = []row{{kind: rowContainer, key: "id:c1", container: c}}
+		m.cursor = 0
+		m.subtab = subInfo
+		m.syncSubVP()
 		extra := detailExtra{
 			env:    []string{"FOO=bar"},
 			titles: []string{"PID", "CMD"},
@@ -2760,22 +2769,23 @@ func TestDetailView(t *testing.T) {
 		got, _ = m.Update(detailExtraMsg{id: "c1", extra: extra})
 
 		gotModel := got.(Model)
-		assert.Contains(t, gotModel.detail, "env:")
-		assert.Contains(t, gotModel.detail, "top:")
-		assert.Contains(t, gotModel.detail, "FOO=bar")
-		assert.Contains(t, gotModel.detail, "nginx")
+		detail := gotModel.subVP.View()
+		assert.Contains(t, detail, "env:")
+		assert.Contains(t, detail, "top:")
+		assert.Contains(t, detail, "FOO=bar")
+		assert.Contains(t, detail, "nginx")
 	})
 
-	t.Run("detailExtraMsg with a stack detail open re-renders the stack detail", func(t *testing.T) {
+	t.Run("detailExtraMsg with a stack's info subtab open re-renders the stack detail", func(t *testing.T) {
 		t.Parallel()
 
 		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
 		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
 		m = got.(Model)
-		rowCopy := row{kind: rowStack, key: "stack:app", project: "app"}
-		m.detailRow = &rowCopy
-		m.detail = m.renderStackDetail("app")
-		m.detailVP.SetContent(m.detail)
+		m.rows = []row{{kind: rowStack, key: "stack:app", project: "app"}}
+		m.cursor = 0
+		m.subtab = subInfo
+		m.syncSubVP()
 		extra := detailExtra{
 			env:    []string{"FOO=bar"},
 			titles: []string{"PID", "CMD"},
@@ -2785,16 +2795,15 @@ func TestDetailView(t *testing.T) {
 		got, _ = m.Update(detailExtraMsg{id: "c1", extra: extra})
 
 		gotModel := got.(Model)
-		assert.Contains(t, gotModel.detail, "project: app")
+		assert.Contains(t, gotModel.subVP.View(), "project: app")
 	})
 
-	t.Run("detailExtraMsg without detail open only merges extras without touching detail", func(t *testing.T) {
+	t.Run("detailExtraMsg with the logs subtab open only merges extras without touching the subtab", func(t *testing.T) {
 		t.Parallel()
 
 		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
 		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
 		m = got.(Model)
-		m.detail = ""
 		extra := detailExtra{
 			env:    []string{"FOO=bar"},
 			titles: []string{"PID", "CMD"},
@@ -2804,8 +2813,113 @@ func TestDetailView(t *testing.T) {
 		got, _ = m.Update(detailExtraMsg{id: "c1", extra: extra})
 
 		gotModel := got.(Model)
-		assert.Equal(t, "", gotModel.detail)
+		assert.Equal(t, subLogs, gotModel.subtab)
 		assert.Equal(t, extra, gotModel.extras["c1"])
+	})
+}
+
+func TestSubtabs(t *testing.T) {
+	t.Parallel()
+
+	t.Run("] cycles logs->info->env and [ steps back with wrap", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+		m = got.(Model)
+		m.tab = tabContainers
+		m.rows = []row{{kind: rowContainer, key: "id:c1", container: Container{ID: "c1"}}}
+		m.cursor = 0
+
+		got, _ = m.updateKeys(newTestKeyMsg("]"))
+		m = got.(Model)
+		assert.Equal(t, subInfo, m.subtab)
+
+		got, _ = m.updateKeys(newTestKeyMsg("]"))
+		m = got.(Model)
+		assert.Equal(t, subEnv, m.subtab)
+
+		got, _ = m.updateKeys(newTestKeyMsg("["))
+		m = got.(Model)
+		assert.Equal(t, subInfo, m.subtab)
+
+		got, _ = m.updateKeys(newTestKeyMsg("["))
+		m = got.(Model)
+		assert.Equal(t, subLogs, m.subtab)
+
+		got, _ = m.updateKeys(newTestKeyMsg("["))
+		m = got.(Model)
+		assert.Equal(t, subInspect, m.subtab)
+	})
+
+	t.Run("over a stack row ] only alternates logs and info", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+		m = got.(Model)
+		m.tab = tabContainers
+		m.rows = []row{{kind: rowStack, key: "stack:app", project: "app"}}
+		m.cursor = 0
+
+		got, _ = m.updateKeys(newTestKeyMsg("]"))
+		m = got.(Model)
+		assert.Equal(t, subInfo, m.subtab)
+
+		got, _ = m.updateKeys(newTestKeyMsg("]"))
+		m = got.(Model)
+		assert.Equal(t, subLogs, m.subtab)
+	})
+
+	t.Run("moving the cursor from a container to a stack while in env clamps to info", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+		m = got.(Model)
+		m.tab = tabContainers
+		m.rows = []row{
+			{kind: rowStack, key: "stack:app", project: "app"},
+			{kind: rowContainer, key: "id:c1", container: Container{ID: "c1"}},
+		}
+		m.cursor = 1
+		m.subtab = subEnv
+
+		got, _ = m.updateKeys(newTestKeyMsg("k"))
+
+		gotModel := got.(Model)
+		assert.Equal(t, 0, gotModel.cursor)
+		assert.Equal(t, subInfo, gotModel.subtab)
+	})
+
+	t.Run("the right panel title contains the active subtab's label", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+		m = got.(Model)
+		m.tab = tabContainers
+		m.rows = []row{{kind: rowContainer, key: "id:c1", container: Container{ID: "c1"}}}
+		m.cursor = 0
+		m.subtab = subEnv
+
+		titlesRow := strings.Split(m.View(), "\n")[1]
+
+		assert.Contains(t, titlesRow, "env")
+	})
+
+	t.Run("the footer in a non-logs subtab contains [/] view", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+		m = got.(Model)
+		m.tab = tabContainers
+		m.subtab = subInfo
+
+		gotView := m.View()
+
+		assert.Contains(t, gotView, "[/] view")
 	})
 }
 
