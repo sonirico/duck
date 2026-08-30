@@ -77,11 +77,13 @@ const (
 	deleteVolume deleteKind = iota
 	deleteNetwork
 	deleteContainer
+	deleteStack
 )
 
 type pendingDelete struct {
 	kind  deleteKind
 	id    string
+	ids   []string
 	label string
 }
 
@@ -432,9 +434,18 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, m.containerOpCmd(op, []string{container.ID})
 		}
 	case "d":
-		if m.confirm == nil && m.cursor >= 0 && m.cursor < len(m.rows) && m.rows[m.cursor].kind == rowContainer {
-			container := m.rows[m.cursor].container
-			m.confirm = &pendingDelete{kind: deleteContainer, id: container.ID, label: container.Name}
+		if m.confirm == nil && m.cursor >= 0 && m.cursor < len(m.rows) {
+			r := m.rows[m.cursor]
+			switch r.kind {
+			case rowContainer:
+				m.confirm = &pendingDelete{kind: deleteContainer, id: r.container.ID, label: r.container.Name}
+			case rowStack:
+				name := r.project
+				if name == "" {
+					name = "standalone"
+				}
+				m.confirm = &pendingDelete{kind: deleteStack, ids: m.stackContainerIDs(r.project), label: name}
+			}
 		}
 	case "y":
 		if m.confirm != nil {
@@ -523,6 +534,7 @@ func (m Model) applyConfirm() (Model, tea.Cmd) {
 	}
 	kind := m.confirm.kind
 	id := m.confirm.id
+	ids := m.confirm.ids
 	resources := m.resources
 	m.confirm = nil
 	return m, func() tea.Msg {
@@ -534,6 +546,12 @@ func (m Model) applyConfirm() (Model, tea.Cmd) {
 			_, err = resources.NetworkRemove(context.Background(), id, client.NetworkRemoveOptions{})
 		case deleteContainer:
 			_, err = resources.ContainerRemove(context.Background(), id, client.ContainerRemoveOptions{})
+		case deleteStack:
+			for _, sid := range ids {
+				if _, rmErr := resources.ContainerRemove(context.Background(), sid, client.ContainerRemoveOptions{}); rmErr != nil {
+					err = rmErr
+				}
+			}
 		}
 		if err != nil {
 			return watcherErrMsg{err: err}
