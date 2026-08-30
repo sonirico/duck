@@ -2818,28 +2818,44 @@ func TestDetailView(t *testing.T) {
 	})
 }
 
+func newTestSubtabModel(t *testing.T) Model {
+	t.Helper()
+
+	m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+	got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+	m = got.(Model)
+	m.tab = tabContainers
+	return m
+}
+
 func TestSubtabs(t *testing.T) {
 	t.Parallel()
 
-	t.Run("] cycles logs->info->env and [ steps back with wrap", func(t *testing.T) {
+	t.Run("] cycles logs->info->env", func(t *testing.T) {
 		t.Parallel()
 
-		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
-		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
-		m = got.(Model)
-		m.tab = tabContainers
+		m := newTestSubtabModel(t)
 		m.rows = []row{{kind: rowContainer, key: "id:c1", container: Container{ID: "c1"}}}
 		m.cursor = 0
 
-		got, _ = m.updateKeys(newTestKeyMsg("]"))
+		got, _ := m.updateKeys(newTestKeyMsg("]"))
 		m = got.(Model)
 		assert.Equal(t, subInfo, m.subtab)
 
 		got, _ = m.updateKeys(newTestKeyMsg("]"))
 		m = got.(Model)
 		assert.Equal(t, subEnv, m.subtab)
+	})
 
-		got, _ = m.updateKeys(newTestKeyMsg("["))
+	t.Run("[ steps back with wrap", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestSubtabModel(t)
+		m.rows = []row{{kind: rowContainer, key: "id:c1", container: Container{ID: "c1"}}}
+		m.cursor = 0
+		m.subtab = subEnv
+
+		got, _ := m.updateKeys(newTestKeyMsg("["))
 		m = got.(Model)
 		assert.Equal(t, subInfo, m.subtab)
 
@@ -2855,14 +2871,11 @@ func TestSubtabs(t *testing.T) {
 	t.Run("over a stack row ] only alternates logs and info", func(t *testing.T) {
 		t.Parallel()
 
-		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
-		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
-		m = got.(Model)
-		m.tab = tabContainers
+		m := newTestSubtabModel(t)
 		m.rows = []row{{kind: rowStack, key: "stack:app", project: "app"}}
 		m.cursor = 0
 
-		got, _ = m.updateKeys(newTestKeyMsg("]"))
+		got, _ := m.updateKeys(newTestKeyMsg("]"))
 		m = got.(Model)
 		assert.Equal(t, subInfo, m.subtab)
 
@@ -2874,10 +2887,7 @@ func TestSubtabs(t *testing.T) {
 	t.Run("moving the cursor from a container to a stack while in env clamps to info", func(t *testing.T) {
 		t.Parallel()
 
-		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
-		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
-		m = got.(Model)
-		m.tab = tabContainers
+		m := newTestSubtabModel(t)
 		m.rows = []row{
 			{kind: rowStack, key: "stack:app", project: "app"},
 			{kind: rowContainer, key: "id:c1", container: Container{ID: "c1"}},
@@ -2885,7 +2895,7 @@ func TestSubtabs(t *testing.T) {
 		m.cursor = 1
 		m.subtab = subEnv
 
-		got, _ = m.updateKeys(newTestKeyMsg("k"))
+		got, _ := m.updateKeys(newTestKeyMsg("k"))
 
 		gotModel := got.(Model)
 		assert.Equal(t, 0, gotModel.cursor)
@@ -2895,10 +2905,7 @@ func TestSubtabs(t *testing.T) {
 	t.Run("the right panel title contains the active subtab's label", func(t *testing.T) {
 		t.Parallel()
 
-		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
-		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
-		m = got.(Model)
-		m.tab = tabContainers
+		m := newTestSubtabModel(t)
 		m.rows = []row{{kind: rowContainer, key: "id:c1", container: Container{ID: "c1"}}}
 		m.cursor = 0
 		m.subtab = subEnv
@@ -2911,10 +2918,7 @@ func TestSubtabs(t *testing.T) {
 	t.Run("the footer in a non-logs subtab contains [/] view", func(t *testing.T) {
 		t.Parallel()
 
-		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
-		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
-		m = got.(Model)
-		m.tab = tabContainers
+		m := newTestSubtabModel(t)
 		m.subtab = subInfo
 
 		gotView := m.View()
