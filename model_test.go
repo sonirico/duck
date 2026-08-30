@@ -1253,7 +1253,7 @@ func TestViewResourceFooter(t *testing.T) {
 
 		gotView := m.View()
 
-		require.Contains(t, gotView, "j/k move  tab focus  e exec  s/S stop/start  r restart  p pause  K kill  d delete  left/right tab  q quit")
+		require.Contains(t, gotView, "j/k move  tab focus  enter detail  y compose  e exec  s/S stop/start  r restart  p pause  K kill  d delete  left/right tab  q quit")
 	})
 
 	t.Run("containers tab shows the confirm prompt", func(t *testing.T) {
@@ -1653,6 +1653,111 @@ func TestComposeKey(t *testing.T) {
 
 		assert.Equal(t, 1, gotModel.(Model).composeVP.YOffset)
 		assert.Nil(t, cmd)
+	})
+}
+
+func TestDetailView(t *testing.T) {
+	t.Parallel()
+
+	t.Run("enter over a container row fills detail with its fields", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+		m = got.(Model)
+		m.tab = tabContainers
+		m.focus = focusList
+		c := Container{ID: "c1", Name: "web", Image: "nginx:latest", Ports: []string{"80:8080/tcp"}}
+		m.rows = []row{{kind: rowContainer, key: "id:c1", container: c}}
+		m.cursor = 0
+
+		gotModel, cmd := m.updateKeys(newTestKeyMsg("enter"))
+
+		assert.Nil(t, cmd)
+		detail := gotModel.(Model).detail
+		assert.Contains(t, detail, "web")
+		assert.Contains(t, detail, "nginx:latest")
+		assert.Contains(t, detail, "80:8080/tcp")
+	})
+
+	t.Run("enter over a stack row fills detail with services and aggregated volumes/networks", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+		m = got.(Model)
+		m.tab = tabContainers
+		m.focus = focusList
+		m.containers = []Container{
+			{ID: "c1", Name: "app_web_1", Project: "app", Service: "web", Volumes: []string{"data"}, Networks: []string{"app_net"}},
+			{ID: "c2", Name: "app_db_1", Project: "app", Service: "db", Volumes: []string{"db-data"}, Networks: []string{"app_net"}},
+		}
+		m.rows = []row{{kind: rowStack, key: "stack:app", project: "app"}}
+		m.cursor = 0
+
+		gotModel, cmd := m.updateKeys(newTestKeyMsg("enter"))
+
+		assert.Nil(t, cmd)
+		detail := gotModel.(Model).detail
+		assert.Contains(t, detail, "services:")
+		assert.Contains(t, detail, "web")
+		assert.Contains(t, detail, "db")
+		assert.Contains(t, detail, "data")
+		assert.Contains(t, detail, "db-data")
+		assert.Contains(t, detail, "app_net")
+	})
+
+	t.Run("detail active shows the detail title and scroll footer, esc returns to logs", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+		m = got.(Model)
+		m.tab = tabContainers
+		m.detail = "name: web\n"
+		m.detailVP.SetContent(m.detail)
+
+		gotView := m.View()
+
+		assert.Contains(t, gotView, " detail")
+		assert.Contains(t, gotView, "j/k scroll  g/G top/bottom  esc back  q quit")
+
+		got, cmd := m.updateKeys(newTestKeyMsg("esc"))
+
+		gotModel := got.(Model)
+		assert.Equal(t, "", gotModel.detail)
+		assert.Nil(t, cmd)
+		assert.Contains(t, gotModel.View(), " logs")
+	})
+
+	t.Run("enter with a pending confirm does not assign detail", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		m.tab = tabContainers
+		m.focus = focusList
+		m.confirm = &pendingDelete{kind: deleteContainer, id: "c1", label: "web"}
+		m.rows = []row{{kind: rowContainer, key: "id:c1", container: Container{ID: "c1", Name: "web"}}}
+		m.cursor = 0
+
+		gotModel, cmd := m.updateKeys(newTestKeyMsg("enter"))
+
+		assert.Equal(t, "", gotModel.(Model).detail)
+		assert.Nil(t, cmd)
+	})
+
+	t.Run("default footer mentions enter detail and y compose", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+		m = got.(Model)
+		m.tab = tabContainers
+
+		gotView := m.View()
+
+		assert.Contains(t, gotView, "enter detail")
+		assert.Contains(t, gotView, "y compose")
 	})
 }
 

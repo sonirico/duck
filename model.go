@@ -153,6 +153,9 @@ type Model struct {
 	compose   string
 	composeVP viewport.Model
 
+	detail   string
+	detailVP viewport.Model
+
 	width  int
 	height int
 	err    error
@@ -176,6 +179,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport.SetContent(m.renderLogs())
 		m.composeVP.Width = m.logsWidth()
 		m.composeVP.Height = m.panesHeight()
+		m.detailVP.Width = m.logsWidth()
+		m.detailVP.Height = m.panesHeight()
 		return m, nil
 
 	case containersMsg:
@@ -273,6 +278,16 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
+	if m.detail != "" {
+		if msg.String() == "esc" {
+			m.detail = ""
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.detailVP, cmd = m.detailVP.Update(msg)
+		return m, cmd
+	}
+
 	if m.focus == focusList {
 		switch msg.String() {
 		case "1":
@@ -349,6 +364,19 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if len(m.rows) > 0 && m.cursor != len(m.rows)-1 {
 			m.cursor = len(m.rows) - 1
 			return m, m.retarget()
+		}
+	case "enter":
+		if m.confirm == nil && m.cursor >= 0 && m.cursor < len(m.rows) {
+			r := m.rows[m.cursor]
+			switch r.kind {
+			case rowStack:
+				m.detail = m.renderStackDetail(r.project)
+			case rowContainer:
+				m.detail = m.renderContainerDetail(r.container)
+			}
+			m.detailVP.SetContent(m.detail)
+			m.detailVP.GotoTop()
+			return m, nil
 		}
 	case "e":
 		if m.confirm == nil && m.cursor >= 0 && m.cursor < len(m.rows) && m.rows[m.cursor].kind == rowContainer {
@@ -657,6 +685,8 @@ func (m Model) View() string {
 	} else if m.tab == tabNetworks {
 		list = m.renderNetworkList()
 		rightContent = m.renderNetworkDetail()
+	} else if m.detail != "" {
+		rightContent = m.detailVP.View()
 	} else if m.compose != "" {
 		rightContent = m.composeVP.View()
 	}
@@ -673,6 +703,9 @@ func (m Model) View() string {
 	}
 	if m.tab == tabContainers && m.compose != "" {
 		title = " compose"
+	}
+	if m.tab == tabContainers && m.detail != "" {
+		title = " detail"
 	}
 	leftTitle := " containers"
 	if m.tab == tabVolumes {
@@ -708,12 +741,14 @@ func (m Model) View() string {
 			}
 		}
 		footer = resourceFooter(m.confirm, hint)
+	} else if m.tab == tabContainers && m.detail != "" {
+		footer = " j/k scroll  g/G top/bottom  esc back  q quit"
 	} else if m.tab == tabContainers && m.compose != "" {
 		footer = " j/k scroll  g/G top/bottom  esc back  q quit"
 	} else if m.confirm != nil {
 		footer = resourceFooter(m.confirm, "")
 	} else {
-		footer = " j/k move  tab focus  e exec  s/S stop/start  r restart  p pause  K kill  d delete  left/right tab  q quit"
+		footer = " j/k move  tab focus  enter detail  y compose  e exec  s/S stop/start  r restart  p pause  K kill  d delete  left/right tab  q quit"
 	}
 
 	return header + "\n" + titles + "\n" +
@@ -765,6 +800,106 @@ func (m Model) renderList() string {
 	if len(m.rows) == 0 {
 		b.WriteString(styleDim.Render("no containers 🦆"))
 	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func (m Model) renderContainerDetail(c Container) string {
+	var b strings.Builder
+	b.WriteString("name: " + c.Name + "\n")
+	b.WriteString("image: " + c.Image + "\n")
+	b.WriteString("state: " + c.State + "\n")
+	b.WriteString("status: " + c.Status + "\n")
+	if c.Project != "" {
+		b.WriteString("project: " + c.Project + "\n")
+	}
+	if c.Service != "" {
+		b.WriteString("service: " + c.Service + "\n")
+	}
+
+	if len(c.Ports) > 0 {
+		b.WriteString("ports:\n")
+		for _, p := range c.Ports {
+			b.WriteString("  " + p + "\n")
+		}
+	}
+	if len(c.Volumes) > 0 {
+		b.WriteString("volumes:\n")
+		for _, v := range c.Volumes {
+			b.WriteString("  " + v + "\n")
+		}
+	}
+	if len(c.Networks) > 0 {
+		b.WriteString("networks:\n")
+		for _, n := range c.Networks {
+			b.WriteString("  " + n + "\n")
+		}
+	}
+
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func (m Model) renderStackDetail(project string) string {
+	name := project
+	if name == "" {
+		name = "standalone"
+	}
+
+	var b strings.Builder
+	b.WriteString("project: " + name + "\n")
+
+	var stackContainers []Container
+	for _, c := range m.containers {
+		if c.Project == project {
+			stackContainers = append(stackContainers, c)
+		}
+	}
+
+	b.WriteString("services:\n")
+	for _, c := range stackContainers {
+		dot := styleDotStopped.Render("●")
+		if c.State == "running" {
+			dot = styleDotRunning.Render("●")
+		}
+		label := c.Service
+		if label == "" {
+			label = c.Name
+		}
+		b.WriteString("  " + dot + " " + label + "  " + styleDim.Render(c.Image) + "\n")
+	}
+
+	ports := make(map[string]struct{})
+	volumes := make(map[string]struct{})
+	networks := make(map[string]struct{})
+	for _, c := range stackContainers {
+		for _, p := range c.Ports {
+			ports[p] = struct{}{}
+		}
+		for _, v := range c.Volumes {
+			volumes[v] = struct{}{}
+		}
+		for _, n := range c.Networks {
+			networks[n] = struct{}{}
+		}
+	}
+
+	writeSet := func(title string, set map[string]struct{}) {
+		if len(set) == 0 {
+			return
+		}
+		entries := make([]string, 0, len(set))
+		for e := range set {
+			entries = append(entries, e)
+		}
+		sort.Strings(entries)
+		b.WriteString(title + "\n")
+		for _, e := range entries {
+			b.WriteString("  " + e + "\n")
+		}
+	}
+	writeSet("ports:", ports)
+	writeSet("volumes:", volumes)
+	writeSet("networks:", networks)
+
 	return strings.TrimRight(b.String(), "\n")
 }
 
