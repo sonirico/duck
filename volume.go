@@ -27,16 +27,9 @@ func newVolumeFromSummary(v volume.Volume) Volume {
 }
 
 func volumeUsedBy(volumes []Volume, containers []Container) map[string]int {
-	used := make(map[string]int, len(volumes))
+	keys := make([]string, 0, len(volumes))
 	for _, v := range volumes {
-		used[v.Name] = 0
+		keys = append(keys, v.Name)
 	}
-	for _, c := range containers {
-		for _, name := range c.Volumes {
-			if _, ok := used[name]; ok {
-				used[name]++
-			}
-		}
-	}
-	return used
+	return usedByNames(keys, containers, func(c Container) []string { return c.Volumes })
 }

@@ -29,16 +29,9 @@ func newNetworkFromSummary(s network.Summary) Network {
 }
 
 func networkUsedBy(networks []Network, containers []Container) map[string]int {
-	used := make(map[string]int, len(networks))
+	keys := make([]string, 0, len(networks))
 	for _, n := range networks {
-		used[n.Name] = 0
+		keys = append(keys, n.Name)
 	}
-	for _, c := range containers {
-		for _, name := range c.Networks {
-			if _, ok := used[name]; ok {
-				used[name]++
-			}
-		}
-	}
-	return used
+	return usedByNames(keys, containers, func(c Container) []string { return c.Networks })
 }
