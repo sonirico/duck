@@ -445,7 +445,7 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
-	if (msg.String() == "]" || msg.String() == "[") && m.tab == tabContainers && m.confirm == nil {
+	if (msg.String() == "]" || msg.String() == "[" || msg.String() == "l" || msg.String() == "h") && m.tab == tabContainers && m.confirm == nil {
 		if m.cursor >= 0 && m.cursor < len(m.rows) {
 			kinds := subtabsFor(m.rows[m.cursor].kind)
 			idx := 0
@@ -455,7 +455,7 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					break
 				}
 			}
-			if msg.String() == "]" {
+			if msg.String() == "]" || msg.String() == "l" {
 				idx = (idx + 1) % len(kinds)
 			} else {
 				idx = (idx - 1 + len(kinds)) % len(kinds)
@@ -1314,7 +1314,7 @@ func (m Model) View() string {
 	} else if m.tab == tabContainers && m.compose != "" {
 		footer = " j/k scroll  g/G top/bottom  esc back  q quit"
 	} else if m.tab == tabContainers && m.subtab != subLogs {
-		footer = " [/] view  j/k scroll  esc logs  q quit"
+		footer = " h/l view  j/k scroll  esc logs  q quit"
 	} else if m.confirm != nil {
 		footer = resourceFooter(m.confirm, "")
 	} else {
@@ -1342,8 +1342,11 @@ func renderTabBar(tab tabID) string {
 }
 
 func (m Model) renderList() string {
-	var b strings.Builder
+	if len(m.rows) == 0 {
+		return styleDim.Render("no containers 🦆")
+	}
 	w := m.listWidth()
+	lines := make([]string, 0, len(m.rows))
 	for i, r := range m.rows {
 		var line string
 		switch r.kind {
@@ -1367,13 +1370,23 @@ func (m Model) renderList() string {
 		if i == m.cursor {
 			line = styleSelected.Render(fmt.Sprintf("%-*s", w, line))
 		}
-		b.WriteString(line)
-		b.WriteString("\n")
+		lines = append(lines, line)
 	}
-	if len(m.rows) == 0 {
-		b.WriteString(styleDim.Render("no containers 🦆"))
+	return strings.Join(visibleWindow(lines, m.cursor, m.panesHeight()), "\n")
+}
+
+func visibleWindow(lines []string, cursor, height int) []string {
+	if height <= 0 || len(lines) <= height {
+		return lines
 	}
-	return strings.TrimRight(b.String(), "\n")
+	start := 0
+	if cursor >= height {
+		start = cursor - height + 1
+	}
+	if start > len(lines)-height {
+		start = len(lines) - height
+	}
+	return lines[start : start+height]
 }
 
 func renderKV(label, value string) string {
@@ -1598,20 +1611,19 @@ func resourceFooter(confirm *pendingDelete, hint string) string {
 }
 
 func (m Model) renderResourceRows(rows []string, cursor int, empty string) string {
-	var b strings.Builder
+	if len(rows) == 0 {
+		return styleDim.Render(empty)
+	}
 	w := m.listWidth()
+	lines := make([]string, 0, len(rows))
 	for i, row := range rows {
 		line := truncate(row, w)
 		if i == cursor {
 			line = styleSelected.Render(fmt.Sprintf("%-*s", w, line))
 		}
-		b.WriteString(line)
-		b.WriteString("\n")
+		lines = append(lines, line)
 	}
-	if len(rows) == 0 {
-		b.WriteString(styleDim.Render(empty))
-	}
-	return strings.TrimRight(b.String(), "\n")
+	return strings.Join(visibleWindow(lines, cursor, m.panesHeight()), "\n")
 }
 
 func (m Model) renderVolumeList() string {

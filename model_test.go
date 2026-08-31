@@ -1759,6 +1759,66 @@ func TestRenderResourceRows(t *testing.T) {
 	})
 }
 
+func TestVisibleWindow(t *testing.T) {
+	t.Parallel()
+
+	lines := []string{"l0", "l1", "l2", "l3", "l4", "l5", "l6", "l7", "l9"}
+
+	tests := []struct {
+		name   string
+		lines  []string
+		cursor int
+		height int
+		want   []string
+	}{
+		{
+			name:   "list shorter than height is not clipped",
+			lines:  lines[:3],
+			cursor: 1,
+			height: 5,
+			want:   lines[:3],
+		},
+		{
+			name:   "cursor 0 shows the first page",
+			lines:  lines,
+			cursor: 0,
+			height: 3,
+			want:   lines[0:3],
+		},
+		{
+			name:   "cursor beyond height slides the window",
+			lines:  lines,
+			cursor: 5,
+			height: 3,
+			want:   lines[3:6],
+		},
+		{
+			name:   "cursor on the last row shows a full last page",
+			lines:  lines,
+			cursor: len(lines) - 1,
+			height: 3,
+			want:   lines[len(lines)-3:],
+		},
+		{
+			name:   "height 0 is not clipped",
+			lines:  lines,
+			cursor: 4,
+			height: 0,
+			want:   lines,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := visibleWindow(tc.lines, tc.cursor, tc.height)
+
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
 func TestRenderVolumeList(t *testing.T) {
 	t.Parallel()
 
@@ -2609,7 +2669,7 @@ func TestDetailView(t *testing.T) {
 		gotView := m.View()
 
 		assert.Contains(t, gotView, "info")
-		assert.Contains(t, gotView, "[/] view  j/k scroll  esc logs  q quit")
+		assert.Contains(t, gotView, "h/l view  j/k scroll  esc logs  q quit")
 
 		got, cmd := m.updateKeys(newTestKeyMsg("esc"))
 
@@ -2939,6 +2999,43 @@ func TestSubtabs(t *testing.T) {
 		assert.Equal(t, subEnv, m.subtab)
 	})
 
+	t.Run("l cycles logs->info->env like ]", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestSubtabModel(t)
+		m.rows = []row{{kind: rowContainer, key: "id:c1", container: Container{ID: "c1"}}}
+		m.cursor = 0
+
+		got, _ := m.updateKeys(newTestKeyMsg("l"))
+		m = got.(Model)
+		assert.Equal(t, subInfo, m.subtab)
+
+		got, _ = m.updateKeys(newTestKeyMsg("l"))
+		m = got.(Model)
+		assert.Equal(t, subEnv, m.subtab)
+	})
+
+	t.Run("h steps back with wrap like [", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestSubtabModel(t)
+		m.rows = []row{{kind: rowContainer, key: "id:c1", container: Container{ID: "c1"}}}
+		m.cursor = 0
+		m.subtab = subEnv
+
+		got, _ := m.updateKeys(newTestKeyMsg("h"))
+		m = got.(Model)
+		assert.Equal(t, subInfo, m.subtab)
+
+		got, _ = m.updateKeys(newTestKeyMsg("h"))
+		m = got.(Model)
+		assert.Equal(t, subLogs, m.subtab)
+
+		got, _ = m.updateKeys(newTestKeyMsg("h"))
+		m = got.(Model)
+		assert.Equal(t, subInspect, m.subtab)
+	})
+
 	t.Run("[ steps back with wrap", func(t *testing.T) {
 		t.Parallel()
 
@@ -3007,7 +3104,7 @@ func TestSubtabs(t *testing.T) {
 		assert.Contains(t, titlesRow, "env")
 	})
 
-	t.Run("the footer in a non-logs subtab contains [/] view", func(t *testing.T) {
+	t.Run("the footer in a non-logs subtab contains h/l view", func(t *testing.T) {
 		t.Parallel()
 
 		m := newTestSubtabModel(t)
@@ -3015,7 +3112,7 @@ func TestSubtabs(t *testing.T) {
 
 		gotView := m.View()
 
-		assert.Contains(t, gotView, "[/] view")
+		assert.Contains(t, gotView, "h/l view")
 	})
 
 	t.Run("subEnv without a cached extra shows loading", func(t *testing.T) {
