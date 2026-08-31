@@ -578,6 +578,25 @@ func TestUpdateKeys(t *testing.T) {
 		assert.Nil(t, cmd)
 	})
 
+	t.Run("l cycles resSubtab to inspect in tabVolumes", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+		m = got.(Model)
+		m.tab = tabVolumes
+		m.volumes = []Volume{{Name: "data"}}
+		m.volCursor = 0
+
+		got, cmd := m.updateKeys(newTestKeyMsg("l"))
+
+		gotModel := got.(Model)
+		assert.Equal(t, subInspect, gotModel.resSubtab)
+		assert.Nil(t, cmd)
+		titlesRow := strings.Split(gotModel.View(), "\n")[1]
+		assert.Contains(t, titlesRow, "inspect")
+	})
+
 	t.Run("networks tab delegates other keys to updateNetworkKeys", func(t *testing.T) {
 		t.Parallel()
 
@@ -1264,6 +1283,58 @@ func TestUpdateVolumeKeys(t *testing.T) {
 				got, cmd := m.updateVolumeKeys(newTestKeyMsg(key))
 
 				assert.Nil(t, got.(Model).confirm)
+				assert.Nil(t, cmd)
+			})
+		}
+	})
+
+	t.Run("esc returns resSubtab to info", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		m.volumes = []Volume{{Name: "data"}}
+		m.volCursor = 0
+		m.resSubtab = subInspect
+
+		got, cmd := m.updateVolumeKeys(newTestKeyMsg("esc"))
+
+		assert.Equal(t, subInfo, got.(Model).resSubtab)
+		assert.Nil(t, cmd)
+	})
+
+	t.Run("j refreshes the subVP with the newly selected volume", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+		m = got.(Model)
+		m.tab = tabVolumes
+		m.volumes = []Volume{{Name: "data"}, {Name: "cache"}}
+		m.volCursor = 0
+
+		got, cmd := m.updateVolumeKeys(newTestKeyMsg("j"))
+
+		gotModel := got.(Model)
+		assert.Equal(t, 1, gotModel.volCursor)
+		assert.Nil(t, cmd)
+		assert.Contains(t, gotModel.subVP.View(), "cache")
+	})
+
+	t.Run("g and G scroll the subVP without moving volCursor when focus is on the right pane", func(t *testing.T) {
+		t.Parallel()
+
+		for _, key := range []string{"g", "G"} {
+			t.Run(key, func(t *testing.T) {
+				t.Parallel()
+
+				m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+				m.focus = focusLogs
+				m.volumes = []Volume{{Name: "data"}, {Name: "cache"}}
+				m.volCursor = 1
+
+				got, cmd := m.updateVolumeKeys(newTestKeyMsg(key))
+
+				assert.Equal(t, 1, got.(Model).volCursor)
 				assert.Nil(t, cmd)
 			})
 		}
@@ -1994,9 +2065,9 @@ func TestViewLayout(t *testing.T) {
 		}
 		tests := []testCase{
 			{name: "containers", tab: tabContainers, wantLeft: " containers", wantRight: " logs"},
-			{name: "volumes", tab: tabVolumes, wantLeft: " volumes", wantRight: " detail"},
-			{name: "networks", tab: tabNetworks, wantLeft: " networks", wantRight: " detail"},
-			{name: "images", tab: tabImages, wantLeft: " images", wantRight: " detail"},
+			{name: "volumes", tab: tabVolumes, wantLeft: " volumes", wantRight: " info"},
+			{name: "networks", tab: tabNetworks, wantLeft: " networks", wantRight: " info"},
+			{name: "images", tab: tabImages, wantLeft: " images", wantRight: " info"},
 		}
 		for _, tc := range tests {
 			t.Run(tc.name, func(t *testing.T) {
