@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"strings"
 	"testing"
 
@@ -2003,6 +2004,13 @@ func TestVisibleWindow(t *testing.T) {
 			height: 0,
 			want:   lines,
 		},
+		{
+			name:   "cursor past the end clamps the window to the last page",
+			lines:  lines,
+			cursor: len(lines),
+			height: 3,
+			want:   lines[len(lines)-3:],
+		},
 	}
 
 	for _, tc := range tests {
@@ -3779,6 +3787,8 @@ func TestSubtabs(t *testing.T) {
 type testResourceClientWithInspectErr struct {
 	containerInspectErr error
 	imageInspectErr     error
+	volumeInspectErr    error
+	networkInspectErr   error
 	containerTopErr     error
 	calls               []testResourceCall
 }
@@ -3789,6 +3799,14 @@ func newTestResourceClientWithContainerInspectErr(err error) *testResourceClient
 
 func newTestResourceClientWithImageInspectErr(err error) *testResourceClientWithInspectErr {
 	return &testResourceClientWithInspectErr{imageInspectErr: err}
+}
+
+func newTestResourceClientWithVolumeInspectErr(err error) *testResourceClientWithInspectErr {
+	return &testResourceClientWithInspectErr{volumeInspectErr: err}
+}
+
+func newTestResourceClientWithNetworkInspectErr(err error) *testResourceClientWithInspectErr {
+	return &testResourceClientWithInspectErr{networkInspectErr: err}
 }
 
 func newTestResourceClientWithContainerTopErr(err error) *testResourceClientWithInspectErr {
@@ -3804,11 +3822,11 @@ func (c *testResourceClientWithInspectErr) NetworkRemove(ctx context.Context, ne
 }
 
 func (c *testResourceClientWithInspectErr) VolumeInspect(ctx context.Context, volumeID string, options client.VolumeInspectOptions) (client.VolumeInspectResult, error) {
-	return client.VolumeInspectResult{}, nil
+	return client.VolumeInspectResult{}, c.volumeInspectErr
 }
 
 func (c *testResourceClientWithInspectErr) NetworkInspect(ctx context.Context, networkID string, options client.NetworkInspectOptions) (client.NetworkInspectResult, error) {
-	return client.NetworkInspectResult{}, nil
+	return client.NetworkInspectResult{}, c.networkInspectErr
 }
 
 func (c *testResourceClientWithInspectErr) ImageRemove(ctx context.Context, imageID string, options client.ImageRemoveOptions) (client.ImageRemoveResult, error) {
@@ -4135,6 +4153,82 @@ func TestResourceInspectCmd(t *testing.T) {
 		got, _ = m.Update(msg)
 		gotModel := got.(Model)
 		assert.Contains(t, gotModel.subVP.View(), "error: "+wantErr.Error())
+	})
+
+	t.Run("volume inspect error renders error: ... in the panel", func(t *testing.T) {
+		t.Parallel()
+
+		wantErr := errors.New("volume inspect boom")
+		resources := newTestResourceClientWithVolumeInspectErr(wantErr)
+		m := newTestModel(newTestLogRetargeter(), resources)
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+		m = got.(Model)
+		m.tab = tabVolumes
+		m.resSubtab = subInspect
+		m.volumes = []Volume{{Name: "data-vol"}}
+		m.volCursor = 0
+
+		cmd := m.resourceInspectCmd()
+
+		require.NotNil(t, cmd)
+		msg, ok := cmd().(resourceInspectMsg)
+		require.True(t, ok)
+		assert.Equal(t, "error: "+wantErr.Error(), msg.inspect)
+	})
+
+	t.Run("network inspect error renders error: ... in the panel", func(t *testing.T) {
+		t.Parallel()
+
+		wantErr := errors.New("network inspect boom")
+		resources := newTestResourceClientWithNetworkInspectErr(wantErr)
+		m := newTestModel(newTestLogRetargeter(), resources)
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+		m = got.(Model)
+		m.tab = tabNetworks
+		m.resSubtab = subInspect
+		m.networks = []Network{{Name: "net1"}}
+		m.netCursor = 0
+
+		cmd := m.resourceInspectCmd()
+
+		require.NotNil(t, cmd)
+		msg, ok := cmd().(resourceInspectMsg)
+		require.True(t, ok)
+		assert.Equal(t, "error: "+wantErr.Error(), msg.inspect)
+	})
+
+	t.Run("empty resourceKey returns nil cmd", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		m.tab = tabVolumes
+		m.resSubtab = subInspect
+		m.volCursor = -1
+
+		cmd := m.resourceInspectCmd()
+
+		assert.Nil(t, cmd)
+	})
+
+	t.Run("marshal error renders error: ... in the panel", func(t *testing.T) {
+		t.Parallel()
+
+		resources := newTestResourceClient(nil)
+		resources.volumeInspect = client.VolumeInspectResult{
+			Volume: volume.Volume{Name: "data-vol", Status: map[string]any{"bad": math.NaN()}},
+		}
+		m := newTestModel(newTestLogRetargeter(), resources)
+		m.tab = tabVolumes
+		m.resSubtab = subInspect
+		m.volumes = []Volume{{Name: "data-vol"}}
+		m.volCursor = 0
+
+		cmd := m.resourceInspectCmd()
+
+		require.NotNil(t, cmd)
+		msg, ok := cmd().(resourceInspectMsg)
+		require.True(t, ok)
+		assert.Contains(t, msg.inspect, "error: ")
 	})
 }
 
