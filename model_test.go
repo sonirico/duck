@@ -4142,7 +4142,9 @@ func TestResourceInspectCmd(t *testing.T) {
 				t.Parallel()
 
 				_, m := tc.setup()
-				msg, ok := m.resourceInspectCmd()().(resourceInspectMsg)
+				cmd := m.resourceInspectCmd()
+				require.NotNil(t, cmd)
+				msg, ok := cmd().(resourceInspectMsg)
 				require.True(t, ok)
 
 				got, _ := m.Update(msg)
