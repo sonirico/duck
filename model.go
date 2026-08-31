@@ -242,6 +242,9 @@ type Model struct {
 	filtering bool
 	filter    string
 
+	commanding bool
+	command    string
+
 	volumes   []Volume
 	volCursor int
 
@@ -488,6 +491,31 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
+	if m.commanding {
+		var cmd tea.Cmd
+		switch msg.String() {
+		case "esc":
+			m.commanding = false
+			m.command = ""
+		case "enter":
+			m.commanding = false
+			if tab, ok := commandTab(m.command); ok {
+				cmd = m.gotoTab(tab)
+			}
+			m.command = ""
+		case "backspace":
+			if m.command != "" {
+				r := []rune(m.command)
+				m.command = string(r[:len(r)-1])
+			}
+		default:
+			if len(msg.Runes) == 1 {
+				m.command += string(msg.Runes)
+			}
+		}
+		return m, cmd
+	}
+
 	if (msg.String() == "]" || msg.String() == "[" || msg.String() == "l" || msg.String() == "h") && m.confirm == nil {
 		if m.tab == tabContainers {
 			if m.cursor >= 0 && m.cursor < len(m.rows) {
@@ -532,45 +560,28 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.focus == focusList {
 		switch msg.String() {
 		case "1":
-			m.tab = tabContainers
-			m.confirm = nil
-			return m, m.retarget()
+			return m, m.gotoTab(tabContainers)
 		case "2":
-			m.tab = tabVolumes
-			m.confirm = nil
-			m.syncSubVP()
-			return m, m.resourceInspectCmd()
+			return m, m.gotoTab(tabVolumes)
 		case "3":
-			m.tab = tabNetworks
-			m.confirm = nil
-			m.syncSubVP()
-			return m, m.resourceInspectCmd()
+			return m, m.gotoTab(tabNetworks)
 		case "4":
-			m.tab = tabImages
-			m.confirm = nil
-			m.syncSubVP()
-			return m, m.resourceInspectCmd()
+			return m, m.gotoTab(tabImages)
 		case "right":
-			m.tab = (m.tab + 1) % 4
-			m.confirm = nil
-			if m.tab == tabContainers {
-				return m, m.retarget()
-			}
-			m.syncSubVP()
-			return m, m.resourceInspectCmd()
+			return m, m.gotoTab((m.tab + 1) % 4)
 		case "left":
-			m.tab = (m.tab + 3) % 4
-			m.confirm = nil
-			if m.tab == tabContainers {
-				return m, m.retarget()
-			}
-			m.syncSubVP()
-			return m, m.resourceInspectCmd()
+			return m, m.gotoTab((m.tab + 3) % 4)
 		}
 	}
 
 	if msg.String() == "/" && m.focus == focusList && m.confirm == nil {
 		m.filtering = true
+		return m, nil
+	}
+
+	if msg.String() == ":" && m.focus == focusList && m.confirm == nil {
+		m.commanding = true
+		m.command = ""
 		return m, nil
 	}
 
@@ -762,6 +773,40 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+func (m *Model) gotoTab(tab tabID) tea.Cmd {
+	m.tab = tab
+	m.confirm = nil
+	if tab == tabContainers {
+		return m.retarget()
+	}
+	m.syncSubVP()
+	return m.resourceInspectCmd()
+}
+
+func commandTab(input string) (tabID, bool) {
+	if input == "" {
+		return 0, false
+	}
+	names := map[string]tabID{
+		"containers": tabContainers,
+		"volumes":    tabVolumes,
+		"networks":   tabNetworks,
+		"images":     tabImages,
+	}
+	var match tabID
+	found := 0
+	for name, tab := range names {
+		if strings.HasPrefix(name, input) {
+			match = tab
+			found++
+		}
+	}
+	if found != 1 {
+		return 0, false
+	}
+	return match, true
 }
 
 func (m Model) updateVolumeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -1590,6 +1635,9 @@ func (m Model) View() string {
 	}
 	if m.filtering {
 		footer = " filter: /" + m.filter
+	}
+	if m.commanding {
+		footer = " cmd: :" + m.command
 	}
 
 	return header + "\n" + titles + "\n" +
