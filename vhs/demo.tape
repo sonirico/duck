@@ -17,8 +17,23 @@ Sleep 2s
 Type "j"
 Sleep 2s
 
-Enter
-Sleep 4s
+Type "l"
+Sleep 3s
+
+Type "l"
+Sleep 500ms
+
+Type "l"
+Sleep 500ms
+
+Type "l"
+Sleep 500ms
+
+Type "l"
+Sleep 3s
+
+Type "l"
+Sleep 3s
 
 Escape
 Sleep 1s
@@ -41,17 +56,41 @@ Sleep 2s
 Escape
 Sleep 1s
 
-Right
+Type ":"
+Sleep 1s
+
+Type "vo"
+Sleep 1s
+
+Enter
 Sleep 2s
 
 Type "j"
 Sleep 2s
 
-Right
+Type "l"
+Sleep 3s
+
+Type ":"
+Sleep 1s
+
+Type "net"
+Sleep 1s
+
+Enter
 Sleep 2s
 
-Right
+Type "l"
 Sleep 3s
+
+Type ":"
+Sleep 1s
+
+Type "im"
+Sleep 1s
+
+Enter
+Sleep 2s
 
 Type "j"
 Sleep 2s
