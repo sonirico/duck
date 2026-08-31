@@ -1137,6 +1137,15 @@ func assertScrollForwardsToSubVP(t *testing.T, newModel func() Model, updateFn f
 	})
 }
 
+func assertEscReturnsToInfo(t *testing.T, m Model, updateFn func(Model, string) (Model, tea.Cmd)) {
+	t.Helper()
+
+	got, cmd := updateFn(m, "esc")
+
+	assert.Equal(t, subInfo, got.resSubtab)
+	assert.Nil(t, cmd)
+}
+
 func TestUpdateVolumeKeys(t *testing.T) {
 	t.Parallel()
 
@@ -1393,10 +1402,10 @@ func TestUpdateVolumeKeys(t *testing.T) {
 		m.volCursor = 0
 		m.resSubtab = subInspect
 
-		got, cmd := m.updateVolumeKeys(newTestKeyMsg("esc"))
-
-		assert.Equal(t, subInfo, got.(Model).resSubtab)
-		assert.Nil(t, cmd)
+		assertEscReturnsToInfo(t, m, func(m Model, key string) (Model, tea.Cmd) {
+			got, cmd := m.updateVolumeKeys(newTestKeyMsg(key))
+			return got.(Model), cmd
+		})
 	})
 
 	t.Run("j refreshes the subVP with the newly selected volume", func(t *testing.T) {
@@ -1712,10 +1721,10 @@ func TestUpdateImageKeys(t *testing.T) {
 		m.imgCursor = 0
 		m.resSubtab = subInspect
 
-		got, cmd := m.updateImageKeys(newTestKeyMsg("esc"))
-
-		assert.Equal(t, subInfo, got.(Model).resSubtab)
-		assert.Nil(t, cmd)
+		assertEscReturnsToInfo(t, m, func(m Model, key string) (Model, tea.Cmd) {
+			got, cmd := m.updateImageKeys(newTestKeyMsg(key))
+			return got.(Model), cmd
+		})
 	})
 }
 
@@ -2788,10 +2797,10 @@ func TestUpdateNetworkKeys(t *testing.T) {
 		m.netCursor = 0
 		m.resSubtab = subInspect
 
-		got, cmd := m.updateNetworkKeys(newTestKeyMsg("esc"))
-
-		assert.Equal(t, subInfo, got.(Model).resSubtab)
-		assert.Nil(t, cmd)
+		assertEscReturnsToInfo(t, m, func(m Model, key string) (Model, tea.Cmd) {
+			got, cmd := m.updateNetworkKeys(newTestKeyMsg(key))
+			return got.(Model), cmd
+		})
 	})
 }
 
@@ -4031,31 +4040,104 @@ func TestLazyExtraCmd(t *testing.T) {
 func TestResourceInspectCmd(t *testing.T) {
 	t.Parallel()
 
-	t.Run("volume: entering inspect triggers VolumeInspect and renders the JSON", func(t *testing.T) {
+	inspectTests := []struct {
+		name     string
+		setup    func() (*testResourceClient, Model)
+		wantKey  string
+		wantJSON string
+		wantCall testResourceCall
+	}{
+		{
+			name: "volume",
+			setup: func() (*testResourceClient, Model) {
+				resources := newTestResourceClient(nil)
+				resources.volumeInspect = client.VolumeInspectResult{Volume: volume.Volume{Name: "data-vol"}}
+				m := newTestModel(newTestLogRetargeter(), resources)
+				got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+				m = got.(Model)
+				m.tab = tabVolumes
+				m.resSubtab = subInspect
+				m.volumes = []Volume{{Name: "data-vol"}}
+				m.volCursor = 0
+				return resources, m
+			},
+			wantKey:  "volume:data-vol",
+			wantJSON: `"Name": "data-vol"`,
+			wantCall: testResourceCall{method: "volume-inspect", id: "data-vol"},
+		},
+		{
+			name: "network",
+			setup: func() (*testResourceClient, Model) {
+				resources := newTestResourceClient(nil)
+				resources.networkInspect = client.NetworkInspectResult{Network: network.Inspect{Network: network.Network{Name: "net1"}}}
+				m := newTestModel(newTestLogRetargeter(), resources)
+				got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+				m = got.(Model)
+				m.tab = tabNetworks
+				m.resSubtab = subInspect
+				m.networks = []Network{{Name: "net1"}}
+				m.netCursor = 0
+				return resources, m
+			},
+			wantKey:  "network:net1",
+			wantJSON: `"Name": "net1"`,
+			wantCall: testResourceCall{method: "network-inspect", id: "net1"},
+		},
+		{
+			name: "image",
+			setup: func() (*testResourceClient, Model) {
+				resources := newTestResourceClient(nil)
+				resources.imageInspect = client.ImageInspectResult{InspectResponse: image.InspectResponse{ID: "sha256:abc"}}
+				m := newTestModel(newTestLogRetargeter(), resources)
+				got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+				m = got.(Model)
+				m.tab = tabImages
+				m.resSubtab = subInspect
+				m.images = []Image{{ID: "sha256:abc"}}
+				m.imgCursor = 0
+				return resources, m
+			},
+			wantKey:  "image:sha256:abc",
+			wantJSON: `"Id": "sha256:abc"`,
+			wantCall: testResourceCall{method: "image-inspect", id: "sha256:abc"},
+		},
+	}
+
+	t.Run("entering inspect triggers the SDK inspect call and returns the resource's JSON", func(t *testing.T) {
 		t.Parallel()
 
-		resources := newTestResourceClient(nil)
-		resources.volumeInspect = client.VolumeInspectResult{Volume: volume.Volume{Name: "data-vol"}}
-		m := newTestModel(newTestLogRetargeter(), resources)
-		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
-		m = got.(Model)
-		m.tab = tabVolumes
-		m.resSubtab = subInspect
-		m.volumes = []Volume{{Name: "data-vol"}}
-		m.volCursor = 0
+		for _, tc := range inspectTests {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
 
-		cmd := m.resourceInspectCmd()
+				resources, m := tc.setup()
 
-		require.NotNil(t, cmd)
-		msg, ok := cmd().(resourceInspectMsg)
-		require.True(t, ok)
-		assert.Equal(t, "volume:data-vol", msg.key)
-		assert.Contains(t, msg.inspect, `"Name": "data-vol"`)
-		assert.Equal(t, []testResourceCall{{method: "volume-inspect", id: "data-vol"}}, resources.calls)
+				cmd := m.resourceInspectCmd()
 
-		got, _ = m.Update(msg)
-		gotModel := got.(Model)
-		assert.Contains(t, gotModel.subVP.View(), `"Name": "data-vol"`)
+				require.NotNil(t, cmd)
+				msg, ok := cmd().(resourceInspectMsg)
+				require.True(t, ok)
+				assert.Equal(t, tc.wantKey, msg.key)
+				assert.Contains(t, msg.inspect, tc.wantJSON)
+				assert.Equal(t, []testResourceCall{tc.wantCall}, resources.calls)
+			})
+		}
+	})
+
+	t.Run("Update with the resourceInspectMsg renders the JSON into the subVP", func(t *testing.T) {
+		t.Parallel()
+
+		for _, tc := range inspectTests {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				_, m := tc.setup()
+
+				got, _ := m.Update(resourceInspectMsg{key: tc.wantKey, inspect: tc.wantJSON})
+				gotModel := got.(Model)
+				assert.Contains(t, gotModel.subVP.View(), tc.wantJSON)
+			})
+		}
 	})
 
 	t.Run("cached key returns nil cmd and does not call the SDK again", func(t *testing.T) {
@@ -4076,125 +4158,73 @@ func TestResourceInspectCmd(t *testing.T) {
 		assert.Empty(t, resources.calls)
 	})
 
-	t.Run("network: entering inspect triggers NetworkInspect and renders the JSON", func(t *testing.T) {
-		t.Parallel()
-
-		resources := newTestResourceClient(nil)
-		resources.networkInspect = client.NetworkInspectResult{Network: network.Inspect{Network: network.Network{Name: "net1"}}}
-		m := newTestModel(newTestLogRetargeter(), resources)
-		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
-		m = got.(Model)
-		m.tab = tabNetworks
-		m.resSubtab = subInspect
-		m.networks = []Network{{Name: "net1"}}
-		m.netCursor = 0
-
-		cmd := m.resourceInspectCmd()
-
-		require.NotNil(t, cmd)
-		msg, ok := cmd().(resourceInspectMsg)
-		require.True(t, ok)
-		assert.Equal(t, "network:net1", msg.key)
-		assert.Contains(t, msg.inspect, `"Name": "net1"`)
-		assert.Equal(t, []testResourceCall{{method: "network-inspect", id: "net1"}}, resources.calls)
-
-		got, _ = m.Update(msg)
-		gotModel := got.(Model)
-		assert.Contains(t, gotModel.subVP.View(), `"Name": "net1"`)
-	})
-
-	t.Run("image: entering inspect triggers ImageInspect and renders the JSON", func(t *testing.T) {
-		t.Parallel()
-
-		resources := newTestResourceClient(nil)
-		resources.imageInspect = client.ImageInspectResult{InspectResponse: image.InspectResponse{ID: "sha256:abc"}}
-		m := newTestModel(newTestLogRetargeter(), resources)
-		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
-		m = got.(Model)
-		m.tab = tabImages
-		m.resSubtab = subInspect
-		m.images = []Image{{ID: "sha256:abc"}}
-		m.imgCursor = 0
-
-		cmd := m.resourceInspectCmd()
-
-		require.NotNil(t, cmd)
-		msg, ok := cmd().(resourceInspectMsg)
-		require.True(t, ok)
-		assert.Equal(t, "image:sha256:abc", msg.key)
-		assert.Contains(t, msg.inspect, `"Id": "sha256:abc"`)
-		assert.Equal(t, []testResourceCall{{method: "image-inspect", id: "sha256:abc"}}, resources.calls)
-
-		got, _ = m.Update(msg)
-		gotModel := got.(Model)
-		assert.Contains(t, gotModel.subVP.View(), `"Id": "sha256:abc"`)
-	})
-
 	t.Run("inspect error renders error: ... in the panel", func(t *testing.T) {
 		t.Parallel()
 
-		wantErr := errors.New("image inspect boom")
-		resources := newTestResourceClientWithImageInspectErr(wantErr)
-		m := newTestModel(newTestLogRetargeter(), resources)
-		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
-		m = got.(Model)
-		m.tab = tabImages
-		m.resSubtab = subInspect
-		m.images = []Image{{ID: "sha256:abc"}}
-		m.imgCursor = 0
+		tests := []struct {
+			name  string
+			setup func(err error) Model
+		}{
+			{
+				name: "image",
+				setup: func(err error) Model {
+					m := newTestModel(newTestLogRetargeter(), newTestResourceClientWithImageInspectErr(err))
+					got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+					m = got.(Model)
+					m.tab = tabImages
+					m.resSubtab = subInspect
+					m.images = []Image{{ID: "sha256:abc"}}
+					m.imgCursor = 0
+					return m
+				},
+			},
+			{
+				name: "volume",
+				setup: func(err error) Model {
+					m := newTestModel(newTestLogRetargeter(), newTestResourceClientWithVolumeInspectErr(err))
+					got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+					m = got.(Model)
+					m.tab = tabVolumes
+					m.resSubtab = subInspect
+					m.volumes = []Volume{{Name: "data-vol"}}
+					m.volCursor = 0
+					return m
+				},
+			},
+			{
+				name: "network",
+				setup: func(err error) Model {
+					m := newTestModel(newTestLogRetargeter(), newTestResourceClientWithNetworkInspectErr(err))
+					got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+					m = got.(Model)
+					m.tab = tabNetworks
+					m.resSubtab = subInspect
+					m.networks = []Network{{Name: "net1"}}
+					m.netCursor = 0
+					return m
+				},
+			},
+		}
 
-		cmd := m.resourceInspectCmd()
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
 
-		require.NotNil(t, cmd)
-		msg, ok := cmd().(resourceInspectMsg)
-		require.True(t, ok)
-		assert.Equal(t, "error: "+wantErr.Error(), msg.inspect)
+				wantErr := errors.New(tc.name + " inspect boom")
+				m := tc.setup(wantErr)
 
-		got, _ = m.Update(msg)
-		gotModel := got.(Model)
-		assert.Contains(t, gotModel.subVP.View(), "error: "+wantErr.Error())
-	})
+				cmd := m.resourceInspectCmd()
 
-	t.Run("volume inspect error renders error: ... in the panel", func(t *testing.T) {
-		t.Parallel()
+				require.NotNil(t, cmd)
+				msg, ok := cmd().(resourceInspectMsg)
+				require.True(t, ok)
+				assert.Equal(t, "error: "+wantErr.Error(), msg.inspect)
 
-		wantErr := errors.New("volume inspect boom")
-		resources := newTestResourceClientWithVolumeInspectErr(wantErr)
-		m := newTestModel(newTestLogRetargeter(), resources)
-		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
-		m = got.(Model)
-		m.tab = tabVolumes
-		m.resSubtab = subInspect
-		m.volumes = []Volume{{Name: "data-vol"}}
-		m.volCursor = 0
-
-		cmd := m.resourceInspectCmd()
-
-		require.NotNil(t, cmd)
-		msg, ok := cmd().(resourceInspectMsg)
-		require.True(t, ok)
-		assert.Equal(t, "error: "+wantErr.Error(), msg.inspect)
-	})
-
-	t.Run("network inspect error renders error: ... in the panel", func(t *testing.T) {
-		t.Parallel()
-
-		wantErr := errors.New("network inspect boom")
-		resources := newTestResourceClientWithNetworkInspectErr(wantErr)
-		m := newTestModel(newTestLogRetargeter(), resources)
-		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
-		m = got.(Model)
-		m.tab = tabNetworks
-		m.resSubtab = subInspect
-		m.networks = []Network{{Name: "net1"}}
-		m.netCursor = 0
-
-		cmd := m.resourceInspectCmd()
-
-		require.NotNil(t, cmd)
-		msg, ok := cmd().(resourceInspectMsg)
-		require.True(t, ok)
-		assert.Equal(t, "error: "+wantErr.Error(), msg.inspect)
+				got, _ := m.Update(msg)
+				gotModel := got.(Model)
+				assert.Contains(t, gotModel.subVP.View(), "error: "+wantErr.Error())
+			})
+		}
 	})
 
 	t.Run("empty resourceKey returns nil cmd", func(t *testing.T) {
