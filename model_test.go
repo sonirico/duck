@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net/netip"
 	"strings"
 	"testing"
 
@@ -3408,6 +3409,17 @@ func newTestSubtabModel(t *testing.T) Model {
 	return m
 }
 
+func newTestSubtabViewModel(t *testing.T, subtab subtabID) Model {
+	t.Helper()
+
+	m := newTestSubtabModel(t)
+	m.rows = []row{{kind: rowContainer, key: "id:c1", container: Container{ID: "c1", State: "running"}}}
+	m.cursor = 0
+	m.subtab = subtab
+	m.syncSubVP()
+	return m
+}
+
 func TestSubtabs(t *testing.T) {
 	t.Parallel()
 
@@ -3498,7 +3510,7 @@ func TestSubtabs(t *testing.T) {
 		assert.Nil(t, cmd)
 	})
 
-	t.Run("over a stack row ] only alternates logs and info", func(t *testing.T) {
+	t.Run("over a stack row ] cycles logs, info, vols, nets", func(t *testing.T) {
 		t.Parallel()
 
 		m := newTestSubtabModel(t)
@@ -3508,6 +3520,14 @@ func TestSubtabs(t *testing.T) {
 		got, _ := m.updateKeys(newTestKeyMsg("]"))
 		m = got.(Model)
 		assert.Equal(t, subInfo, m.subtab)
+
+		got, _ = m.updateKeys(newTestKeyMsg("]"))
+		m = got.(Model)
+		assert.Equal(t, subVols, m.subtab)
+
+		got, _ = m.updateKeys(newTestKeyMsg("]"))
+		m = got.(Model)
+		assert.Equal(t, subNets, m.subtab)
 
 		got, _ = m.updateKeys(newTestKeyMsg("]"))
 		m = got.(Model)
@@ -3791,6 +3811,169 @@ func TestSubtabs(t *testing.T) {
 		assert.Equal(t, subEnv, m.subtab)
 		assert.Nil(t, cmd)
 	})
+
+	t.Run("l cycles through subVols and subNets before subInspect", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestSubtabModel(t)
+		m.rows = []row{{kind: rowContainer, key: "id:c1", container: Container{ID: "c1"}}}
+		m.cursor = 0
+		m.subtab = subStats
+
+		got, _ := m.updateKeys(newTestKeyMsg("l"))
+		m = got.(Model)
+		assert.Equal(t, subVols, m.subtab)
+
+		got, _ = m.updateKeys(newTestKeyMsg("l"))
+		m = got.(Model)
+		assert.Equal(t, subNets, m.subtab)
+
+		got, _ = m.updateKeys(newTestKeyMsg("l"))
+		m = got.(Model)
+		assert.Equal(t, subInspect, m.subtab)
+	})
+
+	t.Run("subVols without a cached extra shows loading", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestSubtabViewModel(t, subVols)
+
+		assert.Contains(t, m.View(), "loading...")
+	})
+
+	t.Run("subNets without a cached extra shows loading", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestSubtabViewModel(t, subNets)
+
+		assert.Contains(t, m.View(), "loading...")
+	})
+
+	t.Run("subVols with an injected empty extra shows no mounts", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestSubtabViewModel(t, subVols)
+
+		got, _ := m.Update(detailExtraMsg{id: "c1", extra: detailExtra{mountDetails: nil}})
+
+		assert.Contains(t, got.(Model).View(), "no mounts")
+	})
+
+	t.Run("subNets with an injected empty extra shows no networks", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestSubtabViewModel(t, subNets)
+
+		got, _ := m.Update(detailExtraMsg{id: "c1", extra: detailExtra{netDetails: nil}})
+
+		assert.Contains(t, got.(Model).View(), "no networks")
+	})
+
+	t.Run("subVols with an injected extra shows the mount name, destination and mode", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestSubtabViewModel(t, subVols)
+
+		extra := detailExtra{mountDetails: []mountDetail{{name: "data", destination: "/data", kind: "volume", rw: true}}}
+		got, _ := m.Update(detailExtraMsg{id: "c1", extra: extra})
+
+		gotView := got.(Model).View()
+		assert.Contains(t, gotView, "MOUNTS")
+		assert.Contains(t, gotView, "data -> /data")
+		assert.Contains(t, gotView, "(volume,rw)")
+	})
+
+	t.Run("subNets with an injected extra shows the network section and ip", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestSubtabViewModel(t, subNets)
+
+		extra := detailExtra{netDetails: []netDetail{{name: "app_default", ip: "172.18.0.2", gateway: "172.18.0.1"}}}
+		got, _ := m.Update(detailExtraMsg{id: "c1", extra: extra})
+
+		gotView := got.(Model).View()
+		assert.Contains(t, gotView, "APP_DEFAULT")
+		assert.Contains(t, gotView, "ip:")
+		assert.Contains(t, gotView, "172.18.0.2")
+	})
+
+	t.Run("subNets with an injected extra shows the aliases", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestSubtabViewModel(t, subNets)
+
+		extra := detailExtra{netDetails: []netDetail{{name: "app_default", ip: "172.18.0.2", aliases: []string{"web", "web-1"}}}}
+		got, _ := m.Update(detailExtraMsg{id: "c1", extra: extra})
+
+		gotView := got.(Model).View()
+		assert.Contains(t, gotView, "aliases:")
+		assert.Contains(t, gotView, "web, web-1")
+	})
+
+	t.Run("l cycles through logs, info, vols and nets over a stack row", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestSubtabModel(t)
+		m.rows = []row{{kind: rowStack, key: "stack:app", project: "app"}}
+		m.cursor = 0
+
+		got, _ := m.updateKeys(newTestKeyMsg("l"))
+		m = got.(Model)
+		assert.Equal(t, subInfo, m.subtab)
+
+		got, _ = m.updateKeys(newTestKeyMsg("l"))
+		m = got.(Model)
+		assert.Equal(t, subVols, m.subtab)
+
+		got, _ = m.updateKeys(newTestKeyMsg("l"))
+		m = got.(Model)
+		assert.Equal(t, subNets, m.subtab)
+	})
+
+	t.Run("renderStackVolsDetail groups volumes by service in uppercase", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestSubtabModel(t)
+		m.containers = []Container{
+			{ID: "c1", Project: "app", Service: "web", Volumes: []string{"data"}},
+			{ID: "c2", Project: "app", Service: "db", Volumes: []string{"db-data"}},
+		}
+
+		detail := m.renderStackVolsDetail("app")
+
+		assert.Contains(t, detail, "WEB")
+		assert.Contains(t, detail, "  data")
+		assert.Contains(t, detail, "DB")
+		assert.Contains(t, detail, "  db-data")
+	})
+
+	t.Run("renderStackNetsDetail lists each network with its services", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestSubtabModel(t)
+		m.containers = []Container{
+			{ID: "c1", Project: "app", Service: "web", Networks: []string{"app_net"}},
+			{ID: "c2", Project: "app", Service: "db", Networks: []string{"app_net"}},
+		}
+
+		detail := m.renderStackNetsDetail("app")
+
+		assert.Contains(t, detail, "APP_NET")
+		assert.Contains(t, detail, "  web")
+		assert.Contains(t, detail, "  db")
+	})
+
+	t.Run("renderStackVolsDetail with no volumes shows no volumes", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestSubtabModel(t)
+		m.containers = []Container{{ID: "c1", Project: "app", Service: "web"}}
+
+		detail := m.renderStackVolsDetail("app")
+
+		assert.Contains(t, detail, "VOLUMES")
+		assert.Contains(t, detail, "no volumes")
+	})
 }
 
 type testResourceClientWithInspectErr struct {
@@ -3994,8 +4177,18 @@ func TestDetailExtraCmdMounts(t *testing.T) {
 
 	client := newTestResourceClient(nil)
 	client.containerInspect.Container.Mounts = []container.MountPoint{
-		{Type: mount.TypeBind, Source: "/host/path", Destination: "/data"},
-		{Type: mount.TypeVolume, Name: "db-data", Destination: "/var/lib/data"},
+		{Type: mount.TypeBind, Source: "/host/path", Destination: "/data", RW: false},
+		{Type: mount.TypeVolume, Name: "db-data", Destination: "/var/lib/data", RW: true},
+	}
+	client.containerInspect.Container.NetworkSettings = &container.NetworkSettings{
+		Networks: map[string]*network.EndpointSettings{
+			"bridge": {
+				IPAddress: netip.MustParseAddr("172.17.0.2"),
+				Gateway:   netip.MustParseAddr("172.17.0.1"),
+				Aliases:   []string{"web", "web-1"},
+			},
+			"empty": {},
+		},
 	}
 	m := newTestModel(newTestLogRetargeter(), client)
 
@@ -4005,6 +4198,14 @@ func TestDetailExtraCmdMounts(t *testing.T) {
 	got, ok := cmd().(detailExtraMsg)
 	require.True(t, ok)
 	assert.Equal(t, []string{"/host/path -> /data", "db-data -> /var/lib/data"}, got.extra.mounts)
+	assert.Equal(t, []mountDetail{
+		{name: "/host/path", destination: "/data", kind: "bind", rw: false},
+		{name: "db-data", destination: "/var/lib/data", kind: "volume", rw: true},
+	}, got.extra.mountDetails)
+	assert.Equal(t, []netDetail{
+		{name: "bridge", ip: "172.17.0.2", gateway: "172.17.0.1", aliases: []string{"web", "web-1"}},
+		{name: "empty", ip: "", gateway: "", aliases: nil},
+	}, got.extra.netDetails)
 }
 
 func TestLazyExtraCmd(t *testing.T) {
