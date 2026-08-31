@@ -1374,21 +1374,42 @@ func TestUpdateVolumeKeys(t *testing.T) {
 	t.Run("g and G scroll the subVP without moving volCursor when focus is on the right pane", func(t *testing.T) {
 		t.Parallel()
 
-		for _, key := range []string{"g", "G"} {
-			t.Run(key, func(t *testing.T) {
-				t.Parallel()
+		t.Run("g goes to the top", func(t *testing.T) {
+			t.Parallel()
 
-				m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
-				m.focus = focusLogs
-				m.volumes = []Volume{{Name: "data"}, {Name: "cache"}}
-				m.volCursor = 1
+			m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+			m.focus = focusLogs
+			m.volumes = []Volume{{Name: "data"}, {Name: "cache"}}
+			m.volCursor = 1
+			m.subVP.Height = 2
+			m.subVP.SetContent(strings.Repeat("line\n", 20))
+			m.subVP.YOffset = 5
 
-				got, cmd := m.updateVolumeKeys(newTestKeyMsg(key))
+			got, cmd := m.updateVolumeKeys(newTestKeyMsg("g"))
 
-				assert.Equal(t, 1, got.(Model).volCursor)
-				assert.Nil(t, cmd)
-			})
-		}
+			gotModel := got.(Model)
+			assert.Equal(t, 1, gotModel.volCursor)
+			assert.Nil(t, cmd)
+			assert.Equal(t, 0, gotModel.subVP.YOffset)
+		})
+
+		t.Run("G goes to the bottom", func(t *testing.T) {
+			t.Parallel()
+
+			m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+			m.focus = focusLogs
+			m.volumes = []Volume{{Name: "data"}, {Name: "cache"}}
+			m.volCursor = 1
+			m.subVP.Height = 2
+			m.subVP.SetContent(strings.Repeat("line\n", 20))
+
+			got, cmd := m.updateVolumeKeys(newTestKeyMsg("G"))
+
+			gotModel := got.(Model)
+			assert.Equal(t, 1, gotModel.volCursor)
+			assert.Nil(t, cmd)
+			assert.Greater(t, gotModel.subVP.YOffset, 0)
+		})
 	})
 
 	t.Run("an unrecognized key while focus is on the right pane forwards to the subVP without moving volCursor", func(t *testing.T) {
@@ -1398,11 +1419,15 @@ func TestUpdateVolumeKeys(t *testing.T) {
 		m.focus = focusLogs
 		m.volumes = []Volume{{Name: "data"}, {Name: "cache"}}
 		m.volCursor = 1
+		m.subVP.Height = 2
+		m.subVP.SetContent(strings.Repeat("line\n", 20))
 
-		got, cmd := m.updateVolumeKeys(newTestKeyMsg("x"))
+		got, cmd := m.updateVolumeKeys(newTestKeyMsg("down"))
 
-		assert.Equal(t, 1, got.(Model).volCursor)
+		gotModel := got.(Model)
+		assert.Equal(t, 1, gotModel.volCursor)
 		assert.Nil(t, cmd)
+		assert.Greater(t, gotModel.subVP.YOffset, 0)
 	})
 }
 
@@ -1659,21 +1684,42 @@ func TestUpdateImageKeys(t *testing.T) {
 	t.Run("g and G scroll the subVP without moving imgCursor when focus is on the right pane", func(t *testing.T) {
 		t.Parallel()
 
-		for _, key := range []string{"g", "G"} {
-			t.Run(key, func(t *testing.T) {
-				t.Parallel()
+		t.Run("g goes to the top", func(t *testing.T) {
+			t.Parallel()
 
-				m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
-				m.focus = focusLogs
-				m.images = []Image{{ID: "a"}, {ID: "b"}}
-				m.imgCursor = 1
+			m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+			m.focus = focusLogs
+			m.images = []Image{{ID: "a"}, {ID: "b"}}
+			m.imgCursor = 1
+			m.subVP.Height = 2
+			m.subVP.SetContent(strings.Repeat("line\n", 20))
+			m.subVP.YOffset = 5
 
-				got, cmd := m.updateImageKeys(newTestKeyMsg(key))
+			got, cmd := m.updateImageKeys(newTestKeyMsg("g"))
 
-				assert.Equal(t, 1, got.(Model).imgCursor)
-				assert.Nil(t, cmd)
-			})
-		}
+			gotModel := got.(Model)
+			assert.Equal(t, 1, gotModel.imgCursor)
+			assert.Nil(t, cmd)
+			assert.Equal(t, 0, gotModel.subVP.YOffset)
+		})
+
+		t.Run("G goes to the bottom", func(t *testing.T) {
+			t.Parallel()
+
+			m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+			m.focus = focusLogs
+			m.images = []Image{{ID: "a"}, {ID: "b"}}
+			m.imgCursor = 1
+			m.subVP.Height = 2
+			m.subVP.SetContent(strings.Repeat("line\n", 20))
+
+			got, cmd := m.updateImageKeys(newTestKeyMsg("G"))
+
+			gotModel := got.(Model)
+			assert.Equal(t, 1, gotModel.imgCursor)
+			assert.Nil(t, cmd)
+			assert.Greater(t, gotModel.subVP.YOffset, 0)
+		})
 	})
 
 	t.Run("an unrecognized key while focus is on the right pane forwards to the subVP without moving imgCursor", func(t *testing.T) {
@@ -1683,11 +1729,15 @@ func TestUpdateImageKeys(t *testing.T) {
 		m.focus = focusLogs
 		m.images = []Image{{ID: "a"}, {ID: "b"}}
 		m.imgCursor = 1
+		m.subVP.Height = 2
+		m.subVP.SetContent(strings.Repeat("line\n", 20))
 
-		got, cmd := m.updateImageKeys(newTestKeyMsg("x"))
+		got, cmd := m.updateImageKeys(newTestKeyMsg("down"))
 
-		assert.Equal(t, 1, got.(Model).imgCursor)
+		gotModel := got.(Model)
+		assert.Equal(t, 1, gotModel.imgCursor)
 		assert.Nil(t, cmd)
+		assert.Greater(t, gotModel.subVP.YOffset, 0)
 	})
 
 	t.Run("esc returns resSubtab to info", func(t *testing.T) {
@@ -2649,21 +2699,42 @@ func TestUpdateNetworkKeys(t *testing.T) {
 	t.Run("g and G scroll the subVP without moving netCursor when focus is on the right pane", func(t *testing.T) {
 		t.Parallel()
 
-		for _, key := range []string{"g", "G"} {
-			t.Run(key, func(t *testing.T) {
-				t.Parallel()
+		t.Run("g goes to the top", func(t *testing.T) {
+			t.Parallel()
 
-				m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
-				m.focus = focusLogs
-				m.networks = []Network{{Name: "a"}, {Name: "b"}}
-				m.netCursor = 1
+			m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+			m.focus = focusLogs
+			m.networks = []Network{{Name: "a"}, {Name: "b"}}
+			m.netCursor = 1
+			m.subVP.Height = 2
+			m.subVP.SetContent(strings.Repeat("line\n", 20))
+			m.subVP.YOffset = 5
 
-				got, cmd := m.updateNetworkKeys(newTestKeyMsg(key))
+			got, cmd := m.updateNetworkKeys(newTestKeyMsg("g"))
 
-				assert.Equal(t, 1, got.(Model).netCursor)
-				assert.Nil(t, cmd)
-			})
-		}
+			gotModel := got.(Model)
+			assert.Equal(t, 1, gotModel.netCursor)
+			assert.Nil(t, cmd)
+			assert.Equal(t, 0, gotModel.subVP.YOffset)
+		})
+
+		t.Run("G goes to the bottom", func(t *testing.T) {
+			t.Parallel()
+
+			m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+			m.focus = focusLogs
+			m.networks = []Network{{Name: "a"}, {Name: "b"}}
+			m.netCursor = 1
+			m.subVP.Height = 2
+			m.subVP.SetContent(strings.Repeat("line\n", 20))
+
+			got, cmd := m.updateNetworkKeys(newTestKeyMsg("G"))
+
+			gotModel := got.(Model)
+			assert.Equal(t, 1, gotModel.netCursor)
+			assert.Nil(t, cmd)
+			assert.Greater(t, gotModel.subVP.YOffset, 0)
+		})
 	})
 
 	t.Run("an unrecognized key while focus is on the right pane forwards to the subVP without moving netCursor", func(t *testing.T) {
@@ -2673,11 +2744,15 @@ func TestUpdateNetworkKeys(t *testing.T) {
 		m.focus = focusLogs
 		m.networks = []Network{{Name: "a"}, {Name: "b"}}
 		m.netCursor = 1
+		m.subVP.Height = 2
+		m.subVP.SetContent(strings.Repeat("line\n", 20))
 
-		got, cmd := m.updateNetworkKeys(newTestKeyMsg("x"))
+		got, cmd := m.updateNetworkKeys(newTestKeyMsg("down"))
 
-		assert.Equal(t, 1, got.(Model).netCursor)
+		gotModel := got.(Model)
+		assert.Equal(t, 1, gotModel.netCursor)
 		assert.Nil(t, cmd)
+		assert.Greater(t, gotModel.subVP.YOffset, 0)
 	})
 
 	t.Run("esc returns resSubtab to info", func(t *testing.T) {
