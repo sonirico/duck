@@ -5,13 +5,17 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/image"
 	"github.com/moby/moby/api/types/mount"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/api/types/volume"
 	"github.com/moby/moby/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -37,6 +41,8 @@ type testResourceClient struct {
 	containerOpErr   error
 	containerInspect client.ContainerInspectResult
 	imageInspect     client.ImageInspectResult
+	volumeInspect    client.VolumeInspectResult
+	networkInspect   client.NetworkInspectResult
 	containerStats   func(ctx context.Context, containerID string, options client.ContainerStatsOptions) (client.ContainerStatsResult, error)
 	calls            []testResourceCall
 }
@@ -70,6 +76,16 @@ func (c *testResourceClient) VolumeRemove(ctx context.Context, volumeID string, 
 
 func (c *testResourceClient) NetworkRemove(ctx context.Context, networkID string, options client.NetworkRemoveOptions) (client.NetworkRemoveResult, error) {
 	return c.networkRemove(ctx, networkID, options)
+}
+
+func (c *testResourceClient) VolumeInspect(ctx context.Context, volumeID string, options client.VolumeInspectOptions) (client.VolumeInspectResult, error) {
+	c.calls = append(c.calls, testResourceCall{method: "volume-inspect", id: volumeID})
+	return c.volumeInspect, nil
+}
+
+func (c *testResourceClient) NetworkInspect(ctx context.Context, networkID string, options client.NetworkInspectOptions) (client.NetworkInspectResult, error) {
+	c.calls = append(c.calls, testResourceCall{method: "network-inspect", id: networkID})
+	return c.networkInspect, nil
 }
 
 func (c *testResourceClient) ImageRemove(ctx context.Context, imageID string, options client.ImageRemoveOptions) (client.ImageRemoveResult, error) {
@@ -578,6 +594,61 @@ func TestUpdateKeys(t *testing.T) {
 		assert.Nil(t, cmd)
 	})
 
+	t.Run("l cycles resSubtab to inspect in tabVolumes", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+		m = got.(Model)
+		m.tab = tabVolumes
+		m.volumes = []Volume{{Name: "data"}}
+		m.volCursor = 0
+
+		got, cmd := m.updateKeys(newTestKeyMsg("l"))
+
+		gotModel := got.(Model)
+		assert.Equal(t, subInspect, gotModel.resSubtab)
+		assert.NotNil(t, cmd)
+		titlesRow := strings.Split(gotModel.View(), "\n")[1]
+		assert.Contains(t, titlesRow, "inspect")
+	})
+
+	t.Run("h cycles resSubtab back to inspect in tabVolumes", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+		m = got.(Model)
+		m.tab = tabVolumes
+		m.volumes = []Volume{{Name: "data"}}
+		m.volCursor = 0
+
+		got, cmd := m.updateKeys(newTestKeyMsg("h"))
+
+		gotModel := got.(Model)
+		assert.Equal(t, subInspect, gotModel.resSubtab)
+		assert.NotNil(t, cmd)
+	})
+
+	t.Run("l shows cached inspect content when resInspect already has the key", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+		m = got.(Model)
+		m.tab = tabVolumes
+		m.volumes = []Volume{{Name: "data"}}
+		m.volCursor = 0
+		m.resInspect = map[string]string{"volume:data": "cached inspect output"}
+
+		got, cmd := m.updateKeys(newTestKeyMsg("l"))
+
+		gotModel := got.(Model)
+		assert.Equal(t, subInspect, gotModel.resSubtab)
+		assert.Nil(t, cmd)
+		assert.Contains(t, gotModel.subVP.View(), "cached inspect output")
+	})
+
 	t.Run("networks tab delegates other keys to updateNetworkKeys", func(t *testing.T) {
 		t.Parallel()
 
@@ -1021,6 +1092,60 @@ func TestContainerOpKeys(t *testing.T) {
 	})
 }
 
+func assertScrollForwardsToSubVP(t *testing.T, newModel func() Model, updateFn func(Model, string) (Model, tea.Cmd), getCursor func(Model) int, wantCursor int) {
+	t.Helper()
+
+	t.Run("g and G scroll the subVP without moving the cursor when focus is on the right pane", func(t *testing.T) {
+		t.Parallel()
+
+		t.Run("g goes to the top", func(t *testing.T) {
+			t.Parallel()
+
+			m := newModel()
+			m.subVP.YOffset = 5
+
+			gotModel, cmd := updateFn(m, "g")
+
+			assert.Equal(t, wantCursor, getCursor(gotModel))
+			assert.Nil(t, cmd)
+			assert.Equal(t, 0, gotModel.subVP.YOffset)
+		})
+
+		t.Run("G goes to the bottom", func(t *testing.T) {
+			t.Parallel()
+
+			m := newModel()
+
+			gotModel, cmd := updateFn(m, "G")
+
+			assert.Equal(t, wantCursor, getCursor(gotModel))
+			assert.Nil(t, cmd)
+			assert.Greater(t, gotModel.subVP.YOffset, 0)
+		})
+	})
+
+	t.Run("an unrecognized key while focus is on the right pane forwards to the subVP without moving the cursor", func(t *testing.T) {
+		t.Parallel()
+
+		m := newModel()
+
+		gotModel, cmd := updateFn(m, "down")
+
+		assert.Equal(t, wantCursor, getCursor(gotModel))
+		assert.Nil(t, cmd)
+		assert.Greater(t, gotModel.subVP.YOffset, 0)
+	})
+}
+
+func assertEscReturnsToInfo(t *testing.T, m Model, updateFn func(Model) (Model, tea.Cmd)) {
+	t.Helper()
+
+	got, cmd := updateFn(m)
+
+	assert.Equal(t, subInfo, got.resSubtab)
+	assert.Nil(t, cmd)
+}
+
 func TestUpdateVolumeKeys(t *testing.T) {
 	t.Parallel()
 
@@ -1268,6 +1393,56 @@ func TestUpdateVolumeKeys(t *testing.T) {
 			})
 		}
 	})
+
+	t.Run("esc returns resSubtab to info", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		m.volumes = []Volume{{Name: "data"}}
+		m.volCursor = 0
+		m.resSubtab = subInspect
+
+		assertEscReturnsToInfo(t, m, func(m Model) (Model, tea.Cmd) {
+			got, cmd := m.updateVolumeKeys(newTestKeyMsg("esc"))
+			return got.(Model), cmd
+		})
+	})
+
+	t.Run("j refreshes the subVP with the newly selected volume", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+		m = got.(Model)
+		m.tab = tabVolumes
+		m.volumes = []Volume{{Name: "data"}, {Name: "cache"}}
+		m.volCursor = 0
+
+		got, cmd := m.updateVolumeKeys(newTestKeyMsg("j"))
+
+		gotModel := got.(Model)
+		assert.Equal(t, 1, gotModel.volCursor)
+		assert.Nil(t, cmd)
+		assert.Contains(t, gotModel.subVP.View(), "cache")
+	})
+
+	assertScrollForwardsToSubVP(t,
+		func() Model {
+			m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+			m.focus = focusLogs
+			m.volumes = []Volume{{Name: "data"}, {Name: "cache"}}
+			m.volCursor = 1
+			m.subVP.Height = 2
+			m.subVP.SetContent(strings.Repeat("line\n", 20))
+			return m
+		},
+		func(m Model, key string) (Model, tea.Cmd) {
+			got, cmd := m.updateVolumeKeys(newTestKeyMsg(key))
+			return got.(Model), cmd
+		},
+		func(m Model) int { return m.volCursor },
+		1,
+	)
 }
 
 func TestUpdateImageKeys(t *testing.T) {
@@ -1519,6 +1694,38 @@ func TestUpdateImageKeys(t *testing.T) {
 			})
 		}
 	})
+
+	assertScrollForwardsToSubVP(t,
+		func() Model {
+			m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+			m.focus = focusLogs
+			m.images = []Image{{ID: "a"}, {ID: "b"}}
+			m.imgCursor = 1
+			m.subVP.Height = 2
+			m.subVP.SetContent(strings.Repeat("line\n", 20))
+			return m
+		},
+		func(m Model, key string) (Model, tea.Cmd) {
+			got, cmd := m.updateImageKeys(newTestKeyMsg(key))
+			return got.(Model), cmd
+		},
+		func(m Model) int { return m.imgCursor },
+		1,
+	)
+
+	t.Run("esc returns resSubtab to info", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		m.images = []Image{{ID: "a"}}
+		m.imgCursor = 0
+		m.resSubtab = subInspect
+
+		assertEscReturnsToInfo(t, m, func(m Model) (Model, tea.Cmd) {
+			got, cmd := m.updateImageKeys(newTestKeyMsg("esc"))
+			return got.(Model), cmd
+		})
+	})
 }
 
 func TestPruneKeys(t *testing.T) {
@@ -1625,7 +1832,7 @@ func TestPruneKeys(t *testing.T) {
 func TestResourceFooter(t *testing.T) {
 	t.Parallel()
 
-	const base = " j/k move  left/right tab  d delete  P prune  q quit"
+	const base = " j/k move  h/l view  tab focus  left/right tab  d delete  P prune  q quit"
 
 	tests := []struct {
 		name    string
@@ -1759,6 +1966,160 @@ func TestRenderResourceRows(t *testing.T) {
 	})
 }
 
+func TestVisibleWindow(t *testing.T) {
+	t.Parallel()
+
+	lines := []string{"l0", "l1", "l2", "l3", "l4", "l5", "l6", "l7", "l9"}
+
+	tests := []struct {
+		name   string
+		lines  []string
+		cursor int
+		height int
+		want   []string
+	}{
+		{
+			name:   "list shorter than height is not clipped",
+			lines:  lines[:3],
+			cursor: 1,
+			height: 5,
+			want:   lines[:3],
+		},
+		{
+			name:   "cursor 0 shows the first page",
+			lines:  lines,
+			cursor: 0,
+			height: 3,
+			want:   lines[0:3],
+		},
+		{
+			name:   "cursor beyond height slides the window",
+			lines:  lines,
+			cursor: 5,
+			height: 3,
+			want:   lines[3:6],
+		},
+		{
+			name:   "cursor on the last row shows a full last page",
+			lines:  lines,
+			cursor: len(lines) - 1,
+			height: 3,
+			want:   lines[len(lines)-3:],
+		},
+		{
+			name:   "height 0 is not clipped",
+			lines:  lines,
+			cursor: 4,
+			height: 0,
+			want:   lines,
+		},
+		{
+			name:   "cursor past the end clamps the window to the last page",
+			lines:  lines,
+			cursor: len(lines),
+			height: 3,
+			want:   lines[len(lines)-3:],
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := visibleWindow(tc.lines, tc.cursor, tc.height)
+
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestResourceKey(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		tab   tabID
+		model func(m Model) Model
+		want  string
+	}{
+		{
+			name: "tabVolumes returns a volume-prefixed key",
+			tab:  tabVolumes,
+			model: func(m Model) Model {
+				m.volumes = []Volume{{Name: "data"}}
+				m.volCursor = 0
+				return m
+			},
+			want: "volume:data",
+		},
+		{
+			name: "tabVolumes with an out-of-range cursor returns empty",
+			tab:  tabVolumes,
+			model: func(m Model) Model {
+				m.volCursor = -1
+				return m
+			},
+			want: "",
+		},
+		{
+			name: "tabNetworks returns a network-prefixed key",
+			tab:  tabNetworks,
+			model: func(m Model) Model {
+				m.networks = []Network{{Name: "app-net"}}
+				m.netCursor = 0
+				return m
+			},
+			want: "network:app-net",
+		},
+		{
+			name: "tabNetworks with an out-of-range cursor returns empty",
+			tab:  tabNetworks,
+			model: func(m Model) Model {
+				m.netCursor = -1
+				return m
+			},
+			want: "",
+		},
+		{
+			name: "tabImages returns an image-prefixed key",
+			tab:  tabImages,
+			model: func(m Model) Model {
+				m.images = []Image{{ID: "img1"}}
+				m.imgCursor = 0
+				return m
+			},
+			want: "image:img1",
+		},
+		{
+			name: "tabImages with an out-of-range cursor returns empty",
+			tab:  tabImages,
+			model: func(m Model) Model {
+				m.imgCursor = -1
+				return m
+			},
+			want: "",
+		},
+		{
+			name:  "tabContainers returns empty",
+			tab:   tabContainers,
+			model: func(m Model) Model { return m },
+			want:  "",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+			m.tab = tc.tab
+			m = tc.model(m)
+
+			assert.Equal(t, tc.want, m.resourceKey())
+		})
+	}
+}
+
 func TestRenderVolumeList(t *testing.T) {
 	t.Parallel()
 
@@ -1859,10 +2220,105 @@ func TestRenderImageDetail(t *testing.T) {
 
 		gotDetail := m.renderImageDetail()
 
-		assert.Contains(t, gotDetail, "id: img1")
-		assert.Contains(t, gotDetail, "repo:tag: nginx:latest")
-		assert.Contains(t, gotDetail, "used by:")
+		assert.Contains(t, gotDetail, renderKV("id", shortID("img1")))
+		assert.Contains(t, gotDetail, renderKV("repo:tag", "nginx:latest"))
+		assert.Contains(t, gotDetail, "USED BY")
 		assert.Contains(t, gotDetail, "web")
+	})
+
+	t.Run("shows none when no container uses the image", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		m.images = []Image{{ID: "img1", RepoTag: "nginx:latest", Size: 125_300_000}}
+		m.imgCursor = 0
+
+		gotDetail := m.renderImageDetail()
+
+		assert.Contains(t, gotDetail, "USED BY")
+		assert.Contains(t, gotDetail, styleDim.Render("none"))
+	})
+}
+
+func TestRenderVolumeDetail(t *testing.T) {
+	t.Parallel()
+
+	t.Run("contains name, driver, mount, created and used by", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		m.volumes = []Volume{{Name: "data", Driver: "local", Mountpoint: "/var/lib/docker/volumes/data", Created: "2024-01-01"}}
+		m.containers = []Container{{ID: "c1", Name: "web", Volumes: []string{"data"}}}
+		m.volCursor = 0
+
+		gotDetail := m.renderVolumeDetail()
+
+		assert.Contains(t, gotDetail, renderKV("name", "data"))
+		assert.Contains(t, gotDetail, renderKV("driver", "local"))
+		assert.Contains(t, gotDetail, renderKV("mount", "/var/lib/docker/volumes/data"))
+		assert.Contains(t, gotDetail, renderKV("created", "2024-01-01"))
+		assert.Contains(t, gotDetail, "USED BY")
+		assert.Contains(t, gotDetail, "web")
+	})
+
+	t.Run("shows none when no container uses the volume", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		m.volumes = []Volume{{Name: "data", Driver: "local"}}
+		m.volCursor = 0
+
+		gotDetail := m.renderVolumeDetail()
+
+		assert.Contains(t, gotDetail, "USED BY")
+		assert.Contains(t, gotDetail, styleDim.Render("none"))
+	})
+
+	t.Run("renders labels section sorted alphabetically", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		m.volumes = []Volume{{Name: "data", Driver: "local", Labels: map[string]string{"b": "2", "a": "1"}}}
+		m.volCursor = 0
+
+		gotDetail := m.renderVolumeDetail()
+
+		assert.Contains(t, gotDetail, "LABELS")
+		assert.Regexp(t, "a=1[\\s\\S]*b=2", gotDetail)
+	})
+}
+
+func TestRenderNetworkDetail(t *testing.T) {
+	t.Parallel()
+
+	t.Run("contains id, driver, subnet and used by", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		m.networks = []Network{{ID: "net1", Name: "app_net", Driver: "bridge", Subnet: "172.18.0.0/16"}}
+		m.containers = []Container{{ID: "c1", Name: "web", Networks: []string{"app_net"}}}
+		m.netCursor = 0
+
+		gotDetail := m.renderNetworkDetail()
+
+		assert.Contains(t, gotDetail, renderKV("id", shortID("net1")))
+		assert.Contains(t, gotDetail, renderKV("driver", "bridge"))
+		assert.Contains(t, gotDetail, renderKV("subnet", "172.18.0.0/16"))
+		assert.Contains(t, gotDetail, "USED BY")
+		assert.Contains(t, gotDetail, "web")
+	})
+
+	t.Run("shows none when no container uses the network", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		m.networks = []Network{{ID: "net1", Name: "app_net", Driver: "bridge"}}
+		m.netCursor = 0
+
+		gotDetail := m.renderNetworkDetail()
+
+		assert.Contains(t, gotDetail, "USED BY")
+		assert.Contains(t, gotDetail, styleDim.Render("none"))
 	})
 }
 
@@ -1934,9 +2390,9 @@ func TestViewLayout(t *testing.T) {
 		}
 		tests := []testCase{
 			{name: "containers", tab: tabContainers, wantLeft: " containers", wantRight: " logs"},
-			{name: "volumes", tab: tabVolumes, wantLeft: " volumes", wantRight: " detail"},
-			{name: "networks", tab: tabNetworks, wantLeft: " networks", wantRight: " detail"},
-			{name: "images", tab: tabImages, wantLeft: " images", wantRight: " detail"},
+			{name: "volumes", tab: tabVolumes, wantLeft: " volumes", wantRight: " info"},
+			{name: "networks", tab: tabNetworks, wantLeft: " networks", wantRight: " info"},
+			{name: "images", tab: tabImages, wantLeft: " images", wantRight: " info"},
 		}
 		for _, tc := range tests {
 			t.Run(tc.name, func(t *testing.T) {
@@ -2314,6 +2770,38 @@ func TestUpdateNetworkKeys(t *testing.T) {
 		assert.Nil(t, cmd())
 		assert.Equal(t, "n1", gotID)
 	})
+
+	assertScrollForwardsToSubVP(t,
+		func() Model {
+			m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+			m.focus = focusLogs
+			m.networks = []Network{{Name: "a"}, {Name: "b"}}
+			m.netCursor = 1
+			m.subVP.Height = 2
+			m.subVP.SetContent(strings.Repeat("line\n", 20))
+			return m
+		},
+		func(m Model, key string) (Model, tea.Cmd) {
+			got, cmd := m.updateNetworkKeys(newTestKeyMsg(key))
+			return got.(Model), cmd
+		},
+		func(m Model) int { return m.netCursor },
+		1,
+	)
+
+	t.Run("esc returns resSubtab to info", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		m.networks = []Network{{Name: "a"}}
+		m.netCursor = 0
+		m.resSubtab = subInspect
+
+		assertEscReturnsToInfo(t, m, func(m Model) (Model, tea.Cmd) {
+			got, cmd := m.updateNetworkKeys(newTestKeyMsg("esc"))
+			return got.(Model), cmd
+		})
+	})
 }
 
 func TestComposeKey(t *testing.T) {
@@ -2609,7 +3097,7 @@ func TestDetailView(t *testing.T) {
 		gotView := m.View()
 
 		assert.Contains(t, gotView, "info")
-		assert.Contains(t, gotView, "[/] view  j/k scroll  esc logs  q quit")
+		assert.Contains(t, gotView, "h/l view  j/k scroll  esc logs  q quit")
 
 		got, cmd := m.updateKeys(newTestKeyMsg("esc"))
 
@@ -2939,6 +3427,43 @@ func TestSubtabs(t *testing.T) {
 		assert.Equal(t, subEnv, m.subtab)
 	})
 
+	t.Run("l cycles logs->info->env like ]", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestSubtabModel(t)
+		m.rows = []row{{kind: rowContainer, key: "id:c1", container: Container{ID: "c1"}}}
+		m.cursor = 0
+
+		got, _ := m.updateKeys(newTestKeyMsg("l"))
+		m = got.(Model)
+		assert.Equal(t, subInfo, m.subtab)
+
+		got, _ = m.updateKeys(newTestKeyMsg("l"))
+		m = got.(Model)
+		assert.Equal(t, subEnv, m.subtab)
+	})
+
+	t.Run("h steps back with wrap like [", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestSubtabModel(t)
+		m.rows = []row{{kind: rowContainer, key: "id:c1", container: Container{ID: "c1"}}}
+		m.cursor = 0
+		m.subtab = subEnv
+
+		got, _ := m.updateKeys(newTestKeyMsg("h"))
+		m = got.(Model)
+		assert.Equal(t, subInfo, m.subtab)
+
+		got, _ = m.updateKeys(newTestKeyMsg("h"))
+		m = got.(Model)
+		assert.Equal(t, subLogs, m.subtab)
+
+		got, _ = m.updateKeys(newTestKeyMsg("h"))
+		m = got.(Model)
+		assert.Equal(t, subInspect, m.subtab)
+	})
+
 	t.Run("[ steps back with wrap", func(t *testing.T) {
 		t.Parallel()
 
@@ -2958,6 +3483,19 @@ func TestSubtabs(t *testing.T) {
 		got, _ = m.updateKeys(newTestKeyMsg("["))
 		m = got.(Model)
 		assert.Equal(t, subInspect, m.subtab)
+	})
+
+	t.Run("] is a no-op with an out-of-range cursor", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestSubtabModel(t)
+		m.rows = nil
+		m.cursor = 0
+
+		got, cmd := m.updateKeys(newTestKeyMsg("]"))
+
+		assert.Equal(t, subLogs, got.(Model).subtab)
+		assert.Nil(t, cmd)
 	})
 
 	t.Run("over a stack row ] only alternates logs and info", func(t *testing.T) {
@@ -3007,7 +3545,7 @@ func TestSubtabs(t *testing.T) {
 		assert.Contains(t, titlesRow, "env")
 	})
 
-	t.Run("the footer in a non-logs subtab contains [/] view", func(t *testing.T) {
+	t.Run("the footer in a non-logs subtab contains h/l view", func(t *testing.T) {
 		t.Parallel()
 
 		m := newTestSubtabModel(t)
@@ -3015,7 +3553,7 @@ func TestSubtabs(t *testing.T) {
 
 		gotView := m.View()
 
-		assert.Contains(t, gotView, "[/] view")
+		assert.Contains(t, gotView, "h/l view")
 	})
 
 	t.Run("subEnv without a cached extra shows loading", func(t *testing.T) {
@@ -3258,6 +3796,8 @@ func TestSubtabs(t *testing.T) {
 type testResourceClientWithInspectErr struct {
 	containerInspectErr error
 	imageInspectErr     error
+	volumeInspectErr    error
+	networkInspectErr   error
 	containerTopErr     error
 	calls               []testResourceCall
 }
@@ -3270,6 +3810,14 @@ func newTestResourceClientWithImageInspectErr(err error) *testResourceClientWith
 	return &testResourceClientWithInspectErr{imageInspectErr: err}
 }
 
+func newTestResourceClientWithVolumeInspectErr(err error) *testResourceClientWithInspectErr {
+	return &testResourceClientWithInspectErr{volumeInspectErr: err}
+}
+
+func newTestResourceClientWithNetworkInspectErr(err error) *testResourceClientWithInspectErr {
+	return &testResourceClientWithInspectErr{networkInspectErr: err}
+}
+
 func newTestResourceClientWithContainerTopErr(err error) *testResourceClientWithInspectErr {
 	return &testResourceClientWithInspectErr{containerTopErr: err}
 }
@@ -3280,6 +3828,14 @@ func (c *testResourceClientWithInspectErr) VolumeRemove(ctx context.Context, vol
 
 func (c *testResourceClientWithInspectErr) NetworkRemove(ctx context.Context, networkID string, options client.NetworkRemoveOptions) (client.NetworkRemoveResult, error) {
 	return client.NetworkRemoveResult{}, nil
+}
+
+func (c *testResourceClientWithInspectErr) VolumeInspect(ctx context.Context, volumeID string, options client.VolumeInspectOptions) (client.VolumeInspectResult, error) {
+	return client.VolumeInspectResult{}, c.volumeInspectErr
+}
+
+func (c *testResourceClientWithInspectErr) NetworkInspect(ctx context.Context, networkID string, options client.NetworkInspectOptions) (client.NetworkInspectResult, error) {
+	return client.NetworkInspectResult{}, c.networkInspectErr
 }
 
 func (c *testResourceClientWithInspectErr) ImageRemove(ctx context.Context, imageID string, options client.ImageRemoveOptions) (client.ImageRemoveResult, error) {
@@ -3478,6 +4034,224 @@ func TestLazyExtraCmd(t *testing.T) {
 		cmd := m.lazyExtraCmd()
 
 		assert.Nil(t, cmd)
+	})
+}
+
+func TestResourceInspectCmd(t *testing.T) {
+	t.Parallel()
+
+	newVolumeInspectModel := func(resources resourceClient) Model {
+		m := newTestModel(newTestLogRetargeter(), resources)
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+		m = got.(Model)
+		m.tab = tabVolumes
+		m.resSubtab = subInspect
+		m.volumes = []Volume{{Name: "data-vol"}}
+		m.volCursor = 0
+		return m
+	}
+	newNetworkInspectModel := func(resources resourceClient) Model {
+		m := newTestModel(newTestLogRetargeter(), resources)
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+		m = got.(Model)
+		m.tab = tabNetworks
+		m.resSubtab = subInspect
+		m.networks = []Network{{Name: "net1"}}
+		m.netCursor = 0
+		return m
+	}
+	newImageInspectModel := func(resources resourceClient) Model {
+		m := newTestModel(newTestLogRetargeter(), resources)
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+		m = got.(Model)
+		m.tab = tabImages
+		m.resSubtab = subInspect
+		m.images = []Image{{ID: "sha256:abc"}}
+		m.imgCursor = 0
+		return m
+	}
+
+	inspectTests := []struct {
+		name     string
+		setup    func() (*testResourceClient, Model)
+		wantKey  string
+		wantJSON string
+		wantCall testResourceCall
+	}{
+		{
+			name: "volume",
+			setup: func() (*testResourceClient, Model) {
+				resources := newTestResourceClient(nil)
+				resources.volumeInspect = client.VolumeInspectResult{Volume: volume.Volume{Name: "data-vol"}}
+				return resources, newVolumeInspectModel(resources)
+			},
+			wantKey:  "volume:data-vol",
+			wantJSON: `"Name": "data-vol"`,
+			wantCall: testResourceCall{method: "volume-inspect", id: "data-vol"},
+		},
+		{
+			name: "network",
+			setup: func() (*testResourceClient, Model) {
+				resources := newTestResourceClient(nil)
+				resources.networkInspect = client.NetworkInspectResult{Network: network.Inspect{Network: network.Network{Name: "net1"}}}
+				return resources, newNetworkInspectModel(resources)
+			},
+			wantKey:  "network:net1",
+			wantJSON: `"Name": "net1"`,
+			wantCall: testResourceCall{method: "network-inspect", id: "net1"},
+		},
+		{
+			name: "image",
+			setup: func() (*testResourceClient, Model) {
+				resources := newTestResourceClient(nil)
+				resources.imageInspect = client.ImageInspectResult{InspectResponse: image.InspectResponse{ID: "sha256:abc"}}
+				return resources, newImageInspectModel(resources)
+			},
+			wantKey:  "image:sha256:abc",
+			wantJSON: `"Id": "sha256:abc"`,
+			wantCall: testResourceCall{method: "image-inspect", id: "sha256:abc"},
+		},
+	}
+
+	t.Run("entering inspect triggers the SDK inspect call and returns the resource's JSON", func(t *testing.T) {
+		t.Parallel()
+
+		for _, tc := range inspectTests {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				resources, m := tc.setup()
+
+				cmd := m.resourceInspectCmd()
+
+				require.NotNil(t, cmd)
+				msg, ok := cmd().(resourceInspectMsg)
+				require.True(t, ok)
+				assert.Equal(t, tc.wantKey, msg.key)
+				assert.Contains(t, msg.inspect, tc.wantJSON)
+				assert.Equal(t, []testResourceCall{tc.wantCall}, resources.calls)
+			})
+		}
+	})
+
+	t.Run("Update with the resourceInspectMsg renders the JSON into the subVP", func(t *testing.T) {
+		t.Parallel()
+
+		for _, tc := range inspectTests {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				_, m := tc.setup()
+				cmd := m.resourceInspectCmd()
+				require.NotNil(t, cmd)
+				msg, ok := cmd().(resourceInspectMsg)
+				require.True(t, ok)
+
+				got, _ := m.Update(msg)
+				gotModel := got.(Model)
+				assert.Contains(t, gotModel.subVP.View(), tc.wantJSON)
+			})
+		}
+	})
+
+	t.Run("cached key returns nil cmd and does not call the SDK again", func(t *testing.T) {
+		t.Parallel()
+
+		resources := newTestResourceClient(nil)
+		resources.volumeInspect = client.VolumeInspectResult{Volume: volume.Volume{Name: "data-vol"}}
+		m := newTestModel(newTestLogRetargeter(), resources)
+		m.tab = tabVolumes
+		m.resSubtab = subInspect
+		m.volumes = []Volume{{Name: "data-vol"}}
+		m.volCursor = 0
+		m.resInspect = map[string]string{"volume:data-vol": "cached inspect output"}
+
+		cmd := m.resourceInspectCmd()
+
+		assert.Nil(t, cmd)
+		assert.Empty(t, resources.calls)
+	})
+
+	t.Run("inspect error renders error: ... in the panel", func(t *testing.T) {
+		t.Parallel()
+
+		tests := []struct {
+			name  string
+			setup func(err error) Model
+		}{
+			{
+				name: "image",
+				setup: func(err error) Model {
+					return newImageInspectModel(newTestResourceClientWithImageInspectErr(err))
+				},
+			},
+			{
+				name: "volume",
+				setup: func(err error) Model {
+					return newVolumeInspectModel(newTestResourceClientWithVolumeInspectErr(err))
+				},
+			},
+			{
+				name: "network",
+				setup: func(err error) Model {
+					return newNetworkInspectModel(newTestResourceClientWithNetworkInspectErr(err))
+				},
+			},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				wantErr := errors.New(tc.name + " inspect boom")
+				m := tc.setup(wantErr)
+
+				cmd := m.resourceInspectCmd()
+
+				require.NotNil(t, cmd)
+				msg, ok := cmd().(resourceInspectMsg)
+				require.True(t, ok)
+				assert.Equal(t, "error: "+wantErr.Error(), msg.inspect)
+
+				got, _ := m.Update(msg)
+				gotModel := got.(Model)
+				assert.Contains(t, gotModel.subVP.View(), "error: "+wantErr.Error())
+			})
+		}
+	})
+
+	t.Run("empty resourceKey returns nil cmd", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		m.tab = tabVolumes
+		m.resSubtab = subInspect
+		m.volCursor = -1
+
+		cmd := m.resourceInspectCmd()
+
+		assert.Nil(t, cmd)
+	})
+
+	t.Run("marshal error renders error: ... in the panel", func(t *testing.T) {
+		t.Parallel()
+
+		resources := newTestResourceClient(nil)
+		resources.volumeInspect = client.VolumeInspectResult{
+			Volume: volume.Volume{Name: "data-vol", Status: map[string]any{"bad": math.NaN()}},
+		}
+		m := newTestModel(newTestLogRetargeter(), resources)
+		m.tab = tabVolumes
+		m.resSubtab = subInspect
+		m.volumes = []Volume{{Name: "data-vol"}}
+		m.volCursor = 0
+
+		cmd := m.resourceInspectCmd()
+
+		require.NotNil(t, cmd)
+		msg, ok := cmd().(resourceInspectMsg)
+		require.True(t, ok)
+		assert.Contains(t, msg.inspect, "error: ")
 	})
 }
 

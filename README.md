@@ -71,9 +71,11 @@ just build
 | `d`       | container list | remove the selected container or stack (asks y/n) |
 | `y`       | container list | view the reconstructed docker-compose |
 | `esc`     | compose view | close the compose view                |
-| `[` / `]` | container list | cycle the right panel's view       |
+| `[` / `]` / `h` / `l` | container list | cycle the right panel's view       |
 | `enter`   | container list | open the info view for the selected stack/container |
 | `esc`     | right panel | back to logs                          |
+| `h` / `l` | volumes/networks/images tab | cycle the right panel's view (info/inspect) |
+| `tab`     | volumes/networks/images tab | switch focus to the right panel and scroll it with `j` / `k` |
 | `q`       | anywhere    | quit                      |
 | `j` / `k` | logs panel  | scroll                    |
 | `g`       | logs panel  | jump to top, stop following |

@@ -70,6 +70,8 @@ const (
 	subInspect
 )
 
+var resourceSubtabs = []subtabID{subInfo, subInspect}
+
 func subtabsFor(kind rowKind) []subtabID {
 	switch kind {
 	case rowContainer:
@@ -171,6 +173,11 @@ type detailExtraMsg struct {
 	extra detailExtra
 }
 
+type resourceInspectMsg struct {
+	key     string
+	inspect string
+}
+
 type logRetargeter interface {
 	SetTargets(ts []LogTarget)
 }
@@ -179,7 +186,9 @@ type logRetargeter interface {
 // mutate resources (e.g. deleting a volume).
 type resourceClient interface {
 	VolumeRemove(ctx context.Context, volumeID string, options client.VolumeRemoveOptions) (client.VolumeRemoveResult, error)
+	VolumeInspect(ctx context.Context, volumeID string, options client.VolumeInspectOptions) (client.VolumeInspectResult, error)
 	NetworkRemove(ctx context.Context, networkID string, options client.NetworkRemoveOptions) (client.NetworkRemoveResult, error)
+	NetworkInspect(ctx context.Context, networkID string, options client.NetworkInspectOptions) (client.NetworkInspectResult, error)
 	ContainerStart(ctx context.Context, containerID string, options client.ContainerStartOptions) (client.ContainerStartResult, error)
 	ContainerStop(ctx context.Context, containerID string, options client.ContainerStopOptions) (client.ContainerStopResult, error)
 	ContainerRestart(ctx context.Context, containerID string, options client.ContainerRestartOptions) (client.ContainerRestartResult, error)
@@ -238,13 +247,16 @@ type Model struct {
 	extras       map[string]detailExtra
 	statsTicking bool
 
+	resSubtab  subtabID
+	resInspect map[string]string
+
 	width  int
 	height int
 	err    error
 }
 
 func NewModel(streamer logRetargeter, tmux TmuxInfo, resources resourceClient) Model {
-	return Model{streamer: streamer, tmux: tmux, resources: resources, follow: true}
+	return Model{streamer: streamer, tmux: tmux, resources: resources, follow: true, resSubtab: subInfo}
 }
 
 func (m Model) Init() tea.Cmd {
@@ -285,6 +297,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.volCursor < 0 {
 			m.volCursor = 0
 		}
+		m.syncSubVP()
 		return m, nil
 
 	case networksMsg:
@@ -295,6 +308,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.netCursor < 0 {
 			m.netCursor = 0
 		}
+		m.syncSubVP()
 		return m, nil
 
 	case imagesMsg:
@@ -305,6 +319,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.imgCursor < 0 {
 			m.imgCursor = 0
 		}
+		m.syncSubVP()
 		return m, nil
 
 	case watcherErrMsg:
@@ -336,6 +351,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.extras = make(map[string]detailExtra)
 		}
 		m.extras[msg.id] = msg.extra
+		m.syncSubVP()
+		return m, nil
+
+	case resourceInspectMsg:
+		if m.resInspect == nil {
+			m.resInspect = make(map[string]string)
+		}
+		m.resInspect[msg.key] = msg.inspect
 		m.syncSubVP()
 		return m, nil
 
@@ -445,26 +468,45 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
-	if (msg.String() == "]" || msg.String() == "[") && m.tab == tabContainers && m.confirm == nil {
-		if m.cursor >= 0 && m.cursor < len(m.rows) {
-			kinds := subtabsFor(m.rows[m.cursor].kind)
-			idx := 0
-			for i, k := range kinds {
-				if k == m.subtab {
-					idx = i
-					break
+	if (msg.String() == "]" || msg.String() == "[" || msg.String() == "l" || msg.String() == "h") && m.confirm == nil {
+		if m.tab == tabContainers {
+			if m.cursor >= 0 && m.cursor < len(m.rows) {
+				kinds := subtabsFor(m.rows[m.cursor].kind)
+				idx := 0
+				for i, k := range kinds {
+					if k == m.subtab {
+						idx = i
+						break
+					}
 				}
+				if msg.String() == "]" || msg.String() == "l" {
+					idx = (idx + 1) % len(kinds)
+				} else {
+					idx = (idx - 1 + len(kinds)) % len(kinds)
+				}
+				m.subtab = kinds[idx]
+				m.syncSubVP()
+				return m, tea.Batch(m.lazyExtraCmd(), m.statsTickStartCmd())
 			}
-			if msg.String() == "]" {
-				idx = (idx + 1) % len(kinds)
-			} else {
-				idx = (idx - 1 + len(kinds)) % len(kinds)
-			}
-			m.subtab = kinds[idx]
-			m.syncSubVP()
-			return m, tea.Batch(m.lazyExtraCmd(), m.statsTickStartCmd())
+			return m, nil
 		}
-		return m, nil
+
+		idx := 0
+		for i, k := range resourceSubtabs {
+			if k == m.resSubtab {
+				idx = i
+				break
+			}
+		}
+		if msg.String() == "]" || msg.String() == "l" {
+			idx = (idx + 1) % len(resourceSubtabs)
+		} else {
+			idx = (idx - 1 + len(resourceSubtabs)) % len(resourceSubtabs)
+		}
+		m.resSubtab = resourceSubtabs[idx]
+		m.syncSubVP()
+		m.subVP.GotoTop()
+		return m, m.resourceInspectCmd()
 	}
 
 	if m.focus == focusList {
@@ -476,29 +518,34 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "2":
 			m.tab = tabVolumes
 			m.confirm = nil
-			return m, nil
+			m.syncSubVP()
+			return m, m.resourceInspectCmd()
 		case "3":
 			m.tab = tabNetworks
 			m.confirm = nil
-			return m, nil
+			m.syncSubVP()
+			return m, m.resourceInspectCmd()
 		case "4":
 			m.tab = tabImages
 			m.confirm = nil
-			return m, nil
+			m.syncSubVP()
+			return m, m.resourceInspectCmd()
 		case "right":
 			m.tab = (m.tab + 1) % 4
 			m.confirm = nil
 			if m.tab == tabContainers {
 				return m, m.retarget()
 			}
-			return m, nil
+			m.syncSubVP()
+			return m, m.resourceInspectCmd()
 		case "left":
 			m.tab = (m.tab + 3) % 4
 			m.confirm = nil
 			if m.tab == tabContainers {
 				return m, m.retarget()
 			}
-			return m, nil
+			m.syncSubVP()
+			return m, m.resourceInspectCmd()
 		}
 	}
 
@@ -698,10 +745,24 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) updateVolumeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.focus == focusLogs {
+		switch msg.String() {
+		case "g":
+			m.subVP.GotoTop()
+		case "G":
+			m.subVP.GotoBottom()
+		default:
+			var cmd tea.Cmd
+			m.subVP, cmd = m.subVP.Update(msg)
+			return m, cmd
+		}
+		return m, nil
+	}
 	switch msg.String() {
 	case "j", "down", "k", "up", "g", "G":
 		m.volCursor = moveListCursor(m.volCursor, len(m.filteredVolumes()), msg.String())
-		return m, nil
+		m.syncSubVP()
+		return m, m.resourceInspectCmd()
 	case "d":
 		vols := m.filteredVolumes()
 		if m.confirm != nil || m.volCursor < 0 || m.volCursor >= len(vols) {
@@ -722,11 +783,15 @@ func (m Model) updateVolumeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "n", "esc":
 		if m.confirm != nil {
 			m.confirm = nil
+		} else if m.resSubtab != subInfo {
+			m.resSubtab = subInfo
+			m.syncSubVP()
 		} else if m.filter != "" {
 			m.filter = ""
 			m.volCursor = 0
 			m.netCursor = 0
 			m.imgCursor = 0
+			m.syncSubVP()
 		}
 		return m, nil
 	}
@@ -734,10 +799,24 @@ func (m Model) updateVolumeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) updateNetworkKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.focus == focusLogs {
+		switch msg.String() {
+		case "g":
+			m.subVP.GotoTop()
+		case "G":
+			m.subVP.GotoBottom()
+		default:
+			var cmd tea.Cmd
+			m.subVP, cmd = m.subVP.Update(msg)
+			return m, cmd
+		}
+		return m, nil
+	}
 	switch msg.String() {
 	case "j", "down", "k", "up", "g", "G":
 		m.netCursor = moveListCursor(m.netCursor, len(m.filteredNetworks()), msg.String())
-		return m, nil
+		m.syncSubVP()
+		return m, m.resourceInspectCmd()
 	case "d":
 		nets := m.filteredNetworks()
 		if m.confirm != nil || m.netCursor < 0 || m.netCursor >= len(nets) {
@@ -758,11 +837,15 @@ func (m Model) updateNetworkKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "n", "esc":
 		if m.confirm != nil {
 			m.confirm = nil
+		} else if m.resSubtab != subInfo {
+			m.resSubtab = subInfo
+			m.syncSubVP()
 		} else if m.filter != "" {
 			m.filter = ""
 			m.volCursor = 0
 			m.netCursor = 0
 			m.imgCursor = 0
+			m.syncSubVP()
 		}
 		return m, nil
 	}
@@ -770,10 +853,24 @@ func (m Model) updateNetworkKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) updateImageKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.focus == focusLogs {
+		switch msg.String() {
+		case "g":
+			m.subVP.GotoTop()
+		case "G":
+			m.subVP.GotoBottom()
+		default:
+			var cmd tea.Cmd
+			m.subVP, cmd = m.subVP.Update(msg)
+			return m, cmd
+		}
+		return m, nil
+	}
 	switch msg.String() {
 	case "j", "down", "k", "up", "g", "G":
 		m.imgCursor = moveListCursor(m.imgCursor, len(m.filteredImages()), msg.String())
-		return m, nil
+		m.syncSubVP()
+		return m, m.resourceInspectCmd()
 	case "d":
 		imgs := m.filteredImages()
 		if m.confirm != nil || m.imgCursor < 0 || m.imgCursor >= len(imgs) {
@@ -794,11 +891,15 @@ func (m Model) updateImageKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "n", "esc":
 		if m.confirm != nil {
 			m.confirm = nil
+		} else if m.resSubtab != subInfo {
+			m.resSubtab = subInfo
+			m.syncSubVP()
 		} else if m.filter != "" {
 			m.filter = ""
 			m.volCursor = 0
 			m.netCursor = 0
 			m.imgCursor = 0
+			m.syncSubVP()
 		}
 		return m, nil
 	}
@@ -1058,7 +1159,103 @@ func (m Model) detailExtraCmd(id string, running bool) tea.Cmd {
 	}
 }
 
+func (m Model) resourceKey() string {
+	switch m.tab {
+	case tabVolumes:
+		vols := m.filteredVolumes()
+		if m.volCursor < 0 || m.volCursor >= len(vols) {
+			return ""
+		}
+		return "volume:" + vols[m.volCursor].Name
+	case tabNetworks:
+		nets := m.filteredNetworks()
+		if m.netCursor < 0 || m.netCursor >= len(nets) {
+			return ""
+		}
+		return "network:" + nets[m.netCursor].Name
+	case tabImages:
+		imgs := m.filteredImages()
+		if m.imgCursor < 0 || m.imgCursor >= len(imgs) {
+			return ""
+		}
+		return "image:" + imgs[m.imgCursor].ID
+	}
+	return ""
+}
+
+func (m Model) resourceInspectCmd() tea.Cmd {
+	if m.tab == tabContainers || m.resSubtab != subInspect {
+		return nil
+	}
+	key := m.resourceKey()
+	if key == "" {
+		return nil
+	}
+	if _, ok := m.resInspect[key]; ok {
+		return nil
+	}
+	tab := m.tab
+	resources := m.resources
+	var id string
+	switch tab {
+	case tabVolumes:
+		id = m.filteredVolumes()[m.volCursor].Name
+	case tabNetworks:
+		id = m.filteredNetworks()[m.netCursor].Name
+	case tabImages:
+		id = m.filteredImages()[m.imgCursor].ID
+	}
+	return func() tea.Msg {
+		var payload any
+		switch tab {
+		case tabVolumes:
+			res, err := resources.VolumeInspect(context.Background(), id, client.VolumeInspectOptions{})
+			if err != nil {
+				return resourceInspectMsg{key: key, inspect: "error: " + err.Error()}
+			}
+			payload = res.Volume
+		case tabNetworks:
+			res, err := resources.NetworkInspect(context.Background(), id, client.NetworkInspectOptions{})
+			if err != nil {
+				return resourceInspectMsg{key: key, inspect: "error: " + err.Error()}
+			}
+			payload = res.Network
+		case tabImages:
+			res, err := resources.ImageInspect(context.Background(), id)
+			if err != nil {
+				return resourceInspectMsg{key: key, inspect: "error: " + err.Error()}
+			}
+			payload = res.InspectResponse
+		}
+		b, err := json.MarshalIndent(payload, "", "  ")
+		if err != nil {
+			return resourceInspectMsg{key: key, inspect: "error: " + err.Error()}
+		}
+		return resourceInspectMsg{key: key, inspect: string(b)}
+	}
+}
+
 func (m *Model) syncSubVP() {
+	if m.tab != tabContainers {
+		switch m.resSubtab {
+		case subInfo:
+			switch m.tab {
+			case tabVolumes:
+				m.subVP.SetContent(m.renderVolumeDetail())
+			case tabNetworks:
+				m.subVP.SetContent(m.renderNetworkDetail())
+			case tabImages:
+				m.subVP.SetContent(m.renderImageDetail())
+			}
+		case subInspect:
+			if content, ok := m.resInspect[m.resourceKey()]; ok {
+				m.subVP.SetContent(content)
+			} else {
+				m.subVP.SetContent(styleDim.Render("loading..."))
+			}
+		}
+		return
+	}
 	if m.cursor < 0 || m.cursor >= len(m.rows) {
 		m.subVP.SetContent("")
 		return
@@ -1233,13 +1430,13 @@ func (m Model) View() string {
 	rightContent := m.viewport.View()
 	if m.tab == tabVolumes {
 		list = m.renderVolumeList()
-		rightContent = m.renderVolumeDetail()
+		rightContent = m.subVP.View()
 	} else if m.tab == tabNetworks {
 		list = m.renderNetworkList()
-		rightContent = m.renderNetworkDetail()
+		rightContent = m.subVP.View()
 	} else if m.tab == tabImages {
 		list = m.renderImageList()
-		rightContent = m.renderImageDetail()
+		rightContent = m.subVP.View()
 	} else if m.compose != "" {
 		rightContent = m.composeVP.View()
 	} else if m.subtab != subLogs {
@@ -1263,13 +1460,13 @@ func (m Model) View() string {
 	leftTitle := " containers"
 	if m.tab == tabVolumes {
 		leftTitle = " volumes"
-		title = " detail"
+		title = " " + renderSubtabBar(m.resSubtab, resourceSubtabs)
 	} else if m.tab == tabNetworks {
 		leftTitle = " networks"
-		title = " detail"
+		title = " " + renderSubtabBar(m.resSubtab, resourceSubtabs)
 	} else if m.tab == tabImages {
 		leftTitle = " images"
-		title = " detail"
+		title = " " + renderSubtabBar(m.resSubtab, resourceSubtabs)
 	}
 	if !m.filtering && m.filter != "" {
 		leftTitle += " /" + m.filter
@@ -1314,7 +1511,7 @@ func (m Model) View() string {
 	} else if m.tab == tabContainers && m.compose != "" {
 		footer = " j/k scroll  g/G top/bottom  esc back  q quit"
 	} else if m.tab == tabContainers && m.subtab != subLogs {
-		footer = " [/] view  j/k scroll  esc logs  q quit"
+		footer = " h/l view  j/k scroll  esc logs  q quit"
 	} else if m.confirm != nil {
 		footer = resourceFooter(m.confirm, "")
 	} else {
@@ -1342,8 +1539,11 @@ func renderTabBar(tab tabID) string {
 }
 
 func (m Model) renderList() string {
-	var b strings.Builder
+	if len(m.rows) == 0 {
+		return styleDim.Render("no containers 🦆")
+	}
 	w := m.listWidth()
+	lines := make([]string, 0, len(m.rows))
 	for i, r := range m.rows {
 		var line string
 		switch r.kind {
@@ -1367,13 +1567,23 @@ func (m Model) renderList() string {
 		if i == m.cursor {
 			line = styleSelected.Render(fmt.Sprintf("%-*s", w, line))
 		}
-		b.WriteString(line)
-		b.WriteString("\n")
+		lines = append(lines, line)
 	}
-	if len(m.rows) == 0 {
-		b.WriteString(styleDim.Render("no containers 🦆"))
+	return strings.Join(visibleWindow(lines, m.cursor, m.panesHeight()), "\n")
+}
+
+func visibleWindow(lines []string, cursor, height int) []string {
+	if height <= 0 || len(lines) <= height {
+		return lines
 	}
-	return strings.TrimRight(b.String(), "\n")
+	start := 0
+	if cursor >= height {
+		start = cursor - height + 1
+	}
+	if start > len(lines)-height {
+		start = len(lines) - height
+	}
+	return lines[start : start+height]
 }
 
 func renderKV(label, value string) string {
@@ -1588,7 +1798,7 @@ func (m Model) renderStackDetail(project string) string {
 }
 
 func resourceFooter(confirm *pendingDelete, hint string) string {
-	footer := " j/k move  left/right tab  d delete  P prune  q quit"
+	footer := " j/k move  h/l view  tab focus  left/right tab  d delete  P prune  q quit"
 	if confirm != nil {
 		footer += "  delete " + confirm.label + "? y/n"
 	} else if hint != "" {
@@ -1598,20 +1808,19 @@ func resourceFooter(confirm *pendingDelete, hint string) string {
 }
 
 func (m Model) renderResourceRows(rows []string, cursor int, empty string) string {
-	var b strings.Builder
+	if len(rows) == 0 {
+		return styleDim.Render(empty)
+	}
 	w := m.listWidth()
+	lines := make([]string, 0, len(rows))
 	for i, row := range rows {
 		line := truncate(row, w)
 		if i == cursor {
 			line = styleSelected.Render(fmt.Sprintf("%-*s", w, line))
 		}
-		b.WriteString(line)
-		b.WriteString("\n")
+		lines = append(lines, line)
 	}
-	if len(rows) == 0 {
-		b.WriteString(styleDim.Render(empty))
-	}
-	return strings.TrimRight(b.String(), "\n")
+	return strings.Join(visibleWindow(lines, cursor, m.panesHeight()), "\n")
 }
 
 func (m Model) renderVolumeList() string {
@@ -1636,22 +1845,10 @@ func (m Model) renderVolumeDetail() string {
 	v := vols[m.volCursor]
 
 	var b strings.Builder
-	b.WriteString("name: " + v.Name + "\n")
-	b.WriteString("driver: " + v.Driver + "\n")
-	b.WriteString("mountpoint: " + v.Mountpoint + "\n")
-	b.WriteString("created: " + v.Created + "\n")
-
-	if len(v.Labels) > 0 {
-		keys := make([]string, 0, len(v.Labels))
-		for k := range v.Labels {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		b.WriteString("labels:\n")
-		for _, k := range keys {
-			b.WriteString("  " + k + "=" + v.Labels[k] + "\n")
-		}
-	}
+	b.WriteString(renderKV("name", v.Name) + "\n")
+	b.WriteString(renderKV("driver", v.Driver) + "\n")
+	b.WriteString(renderKV("mount", v.Mountpoint) + "\n")
+	b.WriteString(renderKV("created", v.Created) + "\n")
 
 	var users []string
 	for _, c := range m.containers {
@@ -1662,10 +1859,24 @@ func (m Model) renderVolumeDetail() string {
 			}
 		}
 	}
+	b.WriteString("\n" + styleSection.Render("USED BY") + "\n")
 	if len(users) > 0 {
-		b.WriteString("used by:\n")
 		for _, name := range users {
 			b.WriteString("  " + name + "\n")
+		}
+	} else {
+		b.WriteString(styleDim.Render("none") + "\n")
+	}
+
+	if len(v.Labels) > 0 {
+		keys := make([]string, 0, len(v.Labels))
+		for k := range v.Labels {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		b.WriteString("\n" + styleSection.Render("LABELS") + "\n")
+		for _, k := range keys {
+			b.WriteString("  " + k + "=" + v.Labels[k] + "\n")
 		}
 	}
 
@@ -1707,9 +1918,11 @@ func (m Model) renderNetworkDetail() string {
 	n := nets[m.netCursor]
 
 	var b strings.Builder
-	b.WriteString("id: " + n.ID + "\n")
-	b.WriteString("driver: " + n.Driver + "\n")
-	b.WriteString("subnet: " + n.Subnet + "\n")
+	b.WriteString(renderKV("id", shortID(n.ID)) + "\n")
+	b.WriteString(renderKV("driver", n.Driver) + "\n")
+	if n.Subnet != "" {
+		b.WriteString(renderKV("subnet", n.Subnet) + "\n")
+	}
 
 	var users []string
 	for _, c := range m.containers {
@@ -1720,11 +1933,13 @@ func (m Model) renderNetworkDetail() string {
 			}
 		}
 	}
+	b.WriteString("\n" + styleSection.Render("USED BY") + "\n")
 	if len(users) > 0 {
-		b.WriteString("used by:\n")
 		for _, name := range users {
 			b.WriteString("  " + name + "\n")
 		}
+	} else {
+		b.WriteString(styleDim.Render("none") + "\n")
 	}
 
 	return strings.TrimRight(b.String(), "\n")
@@ -1752,9 +1967,9 @@ func (m Model) renderImageDetail() string {
 	img := imgs[m.imgCursor]
 
 	var b strings.Builder
-	b.WriteString("id: " + img.ID + "\n")
-	b.WriteString("repo:tag: " + img.RepoTag + "\n")
-	b.WriteString("size: " + formatImageSize(img.Size) + "\n")
+	b.WriteString(renderKV("id", shortID(img.ID)) + "\n")
+	b.WriteString(renderKV("repo:tag", img.RepoTag) + "\n")
+	b.WriteString(renderKV("size", formatImageSize(img.Size)) + "\n")
 
 	var users []string
 	for _, c := range m.containers {
@@ -1762,11 +1977,13 @@ func (m Model) renderImageDetail() string {
 			users = append(users, c.Name)
 		}
 	}
+	b.WriteString("\n" + styleSection.Render("USED BY") + "\n")
 	if len(users) > 0 {
-		b.WriteString("used by:\n")
 		for _, name := range users {
 			b.WriteString("  " + name + "\n")
 		}
+	} else {
+		b.WriteString(styleDim.Render("none") + "\n")
 	}
 
 	return strings.TrimRight(b.String(), "\n")
