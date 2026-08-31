@@ -83,6 +83,7 @@ just build
 | `d`       | volumes/networks/images tab | delete unused volume/network/image (asks y/n) |
 | `P`       | anywhere    | prune the active tab's resource (asks y/n) |
 | `/`       | anywhere    | start filtering the active tab's list      |
+| `:`       | anywhere    | command prompt: type a tab name (prefix works, e.g. `:vo`) and enter to jump |
 | `esc`     | filter      | clear the filter                     |
 | `enter`   | filter      | apply the filter                     |
 
