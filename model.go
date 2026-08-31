@@ -79,7 +79,7 @@ func subtabsFor(kind rowKind) []subtabID {
 	case rowContainer:
 		return []subtabID{subLogs, subInfo, subEnv, subTop, subStats, subVols, subNets, subInspect}
 	case rowStack:
-		return []subtabID{subLogs, subInfo}
+		return []subtabID{subLogs, subInfo, subVols, subNets}
 	}
 	return nil
 }
@@ -1333,9 +1333,19 @@ func (m *Model) syncSubVP() {
 	case subStats:
 		m.subVP.SetContent(m.renderStatsDetail(r.container))
 	case subVols:
-		m.subVP.SetContent(m.renderVolsDetail(r.container))
+		switch r.kind {
+		case rowStack:
+			m.subVP.SetContent(m.renderStackVolsDetail(r.project))
+		case rowContainer:
+			m.subVP.SetContent(m.renderVolsDetail(r.container))
+		}
 	case subNets:
-		m.subVP.SetContent(m.renderNetsDetail(r.container))
+		switch r.kind {
+		case rowStack:
+			m.subVP.SetContent(m.renderStackNetsDetail(r.project))
+		case rowContainer:
+			m.subVP.SetContent(m.renderNetsDetail(r.container))
+		}
 	case subInspect:
 		m.subVP.SetContent(m.renderInspectDetail(r.container))
 	case subLogs:
@@ -1904,6 +1914,72 @@ func (m Model) renderStackDetail(project string) string {
 	writeSet("VOLUMES", volumes)
 	writeSet("NETWORKS", networks)
 
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func (m Model) renderStackVolsDetail(project string) string {
+	var stackContainers []Container
+	for _, c := range m.containers {
+		if c.Project == project {
+			stackContainers = append(stackContainers, c)
+		}
+	}
+	sort.Slice(stackContainers, func(i, j int) bool {
+		return stackContainers[i].Service < stackContainers[j].Service
+	})
+
+	var b strings.Builder
+	for _, c := range stackContainers {
+		if len(c.Volumes) == 0 {
+			continue
+		}
+		b.WriteString(styleSection.Render(strings.ToUpper(c.Service)) + "\n")
+		for _, v := range c.Volumes {
+			b.WriteString("  " + v + "\n")
+		}
+		b.WriteString("\n")
+	}
+	if b.Len() == 0 {
+		return styleSection.Render("VOLUMES") + "\n" + styleDim.Render("no volumes")
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func (m Model) renderStackNetsDetail(project string) string {
+	var stackContainers []Container
+	for _, c := range m.containers {
+		if c.Project == project {
+			stackContainers = append(stackContainers, c)
+		}
+	}
+	sort.Slice(stackContainers, func(i, j int) bool {
+		return stackContainers[i].Service < stackContainers[j].Service
+	})
+
+	netServices := make(map[string][]string)
+	for _, c := range stackContainers {
+		for _, n := range c.Networks {
+			netServices[n] = append(netServices[n], c.Service)
+		}
+	}
+	if len(netServices) == 0 {
+		return styleSection.Render("NETWORKS") + "\n" + styleDim.Render("no networks")
+	}
+
+	nets := make([]string, 0, len(netServices))
+	for n := range netServices {
+		nets = append(nets, n)
+	}
+	sort.Strings(nets)
+
+	var b strings.Builder
+	for _, n := range nets {
+		b.WriteString(styleSection.Render(strings.ToUpper(n)) + "\n")
+		for _, svc := range netServices[n] {
+			b.WriteString("  " + svc + "\n")
+		}
+		b.WriteString("\n")
+	}
 	return strings.TrimRight(b.String(), "\n")
 }
 

@@ -3510,7 +3510,7 @@ func TestSubtabs(t *testing.T) {
 		assert.Nil(t, cmd)
 	})
 
-	t.Run("over a stack row ] only alternates logs and info", func(t *testing.T) {
+	t.Run("over a stack row ] cycles logs, info, vols, nets", func(t *testing.T) {
 		t.Parallel()
 
 		m := newTestSubtabModel(t)
@@ -3520,6 +3520,14 @@ func TestSubtabs(t *testing.T) {
 		got, _ := m.updateKeys(newTestKeyMsg("]"))
 		m = got.(Model)
 		assert.Equal(t, subInfo, m.subtab)
+
+		got, _ = m.updateKeys(newTestKeyMsg("]"))
+		m = got.(Model)
+		assert.Equal(t, subVols, m.subtab)
+
+		got, _ = m.updateKeys(newTestKeyMsg("]"))
+		m = got.(Model)
+		assert.Equal(t, subNets, m.subtab)
 
 		got, _ = m.updateKeys(newTestKeyMsg("]"))
 		m = got.(Model)
@@ -3900,6 +3908,71 @@ func TestSubtabs(t *testing.T) {
 		gotView := got.(Model).View()
 		assert.Contains(t, gotView, "aliases:")
 		assert.Contains(t, gotView, "web, web-1")
+	})
+
+	t.Run("l cycles through logs, info, vols and nets over a stack row", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestSubtabModel(t)
+		m.rows = []row{{kind: rowStack, key: "stack:app", project: "app"}}
+		m.cursor = 0
+
+		got, _ := m.updateKeys(newTestKeyMsg("l"))
+		m = got.(Model)
+		assert.Equal(t, subInfo, m.subtab)
+
+		got, _ = m.updateKeys(newTestKeyMsg("l"))
+		m = got.(Model)
+		assert.Equal(t, subVols, m.subtab)
+
+		got, _ = m.updateKeys(newTestKeyMsg("l"))
+		m = got.(Model)
+		assert.Equal(t, subNets, m.subtab)
+	})
+
+	t.Run("renderStackVolsDetail groups volumes by service in uppercase", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestSubtabModel(t)
+		m.containers = []Container{
+			{ID: "c1", Project: "app", Service: "web", Volumes: []string{"data"}},
+			{ID: "c2", Project: "app", Service: "db", Volumes: []string{"db-data"}},
+		}
+
+		detail := m.renderStackVolsDetail("app")
+
+		assert.Contains(t, detail, "WEB")
+		assert.Contains(t, detail, "  data")
+		assert.Contains(t, detail, "DB")
+		assert.Contains(t, detail, "  db-data")
+	})
+
+	t.Run("renderStackNetsDetail lists each network with its services", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestSubtabModel(t)
+		m.containers = []Container{
+			{ID: "c1", Project: "app", Service: "web", Networks: []string{"app_net"}},
+			{ID: "c2", Project: "app", Service: "db", Networks: []string{"app_net"}},
+		}
+
+		detail := m.renderStackNetsDetail("app")
+
+		assert.Contains(t, detail, "APP_NET")
+		assert.Contains(t, detail, "  web")
+		assert.Contains(t, detail, "  db")
+	})
+
+	t.Run("renderStackVolsDetail with no volumes shows no volumes", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestSubtabModel(t)
+		m.containers = []Container{{ID: "c1", Project: "app", Service: "web"}}
+
+		detail := m.renderStackVolsDetail("app")
+
+		assert.Contains(t, detail, "VOLUMES")
+		assert.Contains(t, detail, "no volumes")
 	})
 }
 
