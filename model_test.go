@@ -3409,6 +3409,17 @@ func newTestSubtabModel(t *testing.T) Model {
 	return m
 }
 
+func newTestSubtabViewModel(t *testing.T, subtab subtabID) Model {
+	t.Helper()
+
+	m := newTestSubtabModel(t)
+	m.rows = []row{{kind: rowContainer, key: "id:c1", container: Container{ID: "c1", State: "running"}}}
+	m.cursor = 0
+	m.subtab = subtab
+	m.syncSubVP()
+	return m
+}
+
 func TestSubtabs(t *testing.T) {
 	t.Parallel()
 
@@ -3817,11 +3828,7 @@ func TestSubtabs(t *testing.T) {
 	t.Run("subVols without a cached extra shows loading", func(t *testing.T) {
 		t.Parallel()
 
-		m := newTestSubtabModel(t)
-		m.rows = []row{{kind: rowContainer, key: "id:c1", container: Container{ID: "c1", State: "running"}}}
-		m.cursor = 0
-		m.subtab = subVols
-		m.syncSubVP()
+		m := newTestSubtabViewModel(t, subVols)
 
 		assert.Contains(t, m.View(), "loading...")
 	})
@@ -3829,11 +3836,7 @@ func TestSubtabs(t *testing.T) {
 	t.Run("subNets without a cached extra shows loading", func(t *testing.T) {
 		t.Parallel()
 
-		m := newTestSubtabModel(t)
-		m.rows = []row{{kind: rowContainer, key: "id:c1", container: Container{ID: "c1", State: "running"}}}
-		m.cursor = 0
-		m.subtab = subNets
-		m.syncSubVP()
+		m := newTestSubtabViewModel(t, subNets)
 
 		assert.Contains(t, m.View(), "loading...")
 	})
@@ -3841,11 +3844,7 @@ func TestSubtabs(t *testing.T) {
 	t.Run("subVols with an injected empty extra shows no mounts", func(t *testing.T) {
 		t.Parallel()
 
-		m := newTestSubtabModel(t)
-		m.rows = []row{{kind: rowContainer, key: "id:c1", container: Container{ID: "c1", State: "running"}}}
-		m.cursor = 0
-		m.subtab = subVols
-		m.syncSubVP()
+		m := newTestSubtabViewModel(t, subVols)
 
 		got, _ := m.Update(detailExtraMsg{id: "c1", extra: detailExtra{mountDetails: nil}})
 
@@ -3855,11 +3854,7 @@ func TestSubtabs(t *testing.T) {
 	t.Run("subNets with an injected empty extra shows no networks", func(t *testing.T) {
 		t.Parallel()
 
-		m := newTestSubtabModel(t)
-		m.rows = []row{{kind: rowContainer, key: "id:c1", container: Container{ID: "c1", State: "running"}}}
-		m.cursor = 0
-		m.subtab = subNets
-		m.syncSubVP()
+		m := newTestSubtabViewModel(t, subNets)
 
 		got, _ := m.Update(detailExtraMsg{id: "c1", extra: detailExtra{netDetails: nil}})
 
@@ -3869,11 +3864,7 @@ func TestSubtabs(t *testing.T) {
 	t.Run("subVols with an injected extra shows the mount name, destination and mode", func(t *testing.T) {
 		t.Parallel()
 
-		m := newTestSubtabModel(t)
-		m.rows = []row{{kind: rowContainer, key: "id:c1", container: Container{ID: "c1", State: "running"}}}
-		m.cursor = 0
-		m.subtab = subVols
-		m.syncSubVP()
+		m := newTestSubtabViewModel(t, subVols)
 
 		extra := detailExtra{mountDetails: []mountDetail{{name: "data", destination: "/data", kind: "volume", rw: true}}}
 		got, _ := m.Update(detailExtraMsg{id: "c1", extra: extra})
@@ -3887,11 +3878,7 @@ func TestSubtabs(t *testing.T) {
 	t.Run("subNets with an injected extra shows the network section and ip", func(t *testing.T) {
 		t.Parallel()
 
-		m := newTestSubtabModel(t)
-		m.rows = []row{{kind: rowContainer, key: "id:c1", container: Container{ID: "c1", State: "running"}}}
-		m.cursor = 0
-		m.subtab = subNets
-		m.syncSubVP()
+		m := newTestSubtabViewModel(t, subNets)
 
 		extra := detailExtra{netDetails: []netDetail{{name: "app_default", ip: "172.18.0.2", gateway: "172.18.0.1"}}}
 		got, _ := m.Update(detailExtraMsg{id: "c1", extra: extra})
