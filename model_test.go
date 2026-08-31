@@ -4827,31 +4827,31 @@ func TestCommandMode(t *testing.T) {
 		assert.Equal(t, "vo", m.command)
 	})
 
-	t.Run("1-4 and left/right still switch tabs after the gotoTab refactor", func(t *testing.T) {
-		t.Parallel()
+	tabSwitchTests := []struct {
+		name     string
+		startTab tabID
+		key      string
+		wantTab  tabID
+	}{
+		{name: "digit 2 switches to tab 2", startTab: tabContainers, key: "2", wantTab: tabVolumes},
+		{name: "right arrow switches to next tab", startTab: tabVolumes, key: "right", wantTab: tabNetworks},
+		{name: "left arrow switches to previous tab", startTab: tabNetworks, key: "left", wantTab: tabVolumes},
+		{name: "digit 4 switches to tab 4", startTab: tabVolumes, key: "4", wantTab: tabImages},
+		{name: "digit 1 switches to tab 1", startTab: tabImages, key: "1", wantTab: tabContainers},
+	}
 
-		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
-		m.focus = focusList
-		m.tab = tabContainers
+	for _, tc := range tabSwitchTests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-		got, _ := m.updateKeys(newTestKeyMsg("2"))
-		m = got.(Model)
-		assert.Equal(t, tabVolumes, m.tab)
+			m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+			m.focus = focusList
+			m.tab = tc.startTab
 
-		got, _ = m.updateKeys(newTestKeyMsg("right"))
-		m = got.(Model)
-		assert.Equal(t, tabNetworks, m.tab)
+			got, _ := m.updateKeys(newTestKeyMsg(tc.key))
+			m = got.(Model)
 
-		got, _ = m.updateKeys(newTestKeyMsg("left"))
-		m = got.(Model)
-		assert.Equal(t, tabVolumes, m.tab)
-
-		got, _ = m.updateKeys(newTestKeyMsg("4"))
-		m = got.(Model)
-		assert.Equal(t, tabImages, m.tab)
-
-		got, _ = m.updateKeys(newTestKeyMsg("1"))
-		m = got.(Model)
-		assert.Equal(t, tabContainers, m.tab)
-	})
+			assert.Equal(t, tc.wantTab, m.tab)
+		})
+	}
 }
