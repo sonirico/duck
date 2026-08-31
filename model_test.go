@@ -2240,10 +2240,105 @@ func TestRenderImageDetail(t *testing.T) {
 
 		gotDetail := m.renderImageDetail()
 
-		assert.Contains(t, gotDetail, "id: img1")
-		assert.Contains(t, gotDetail, "repo:tag: nginx:latest")
-		assert.Contains(t, gotDetail, "used by:")
+		assert.Contains(t, gotDetail, renderKV("id", shortID("img1")))
+		assert.Contains(t, gotDetail, renderKV("repo:tag", "nginx:latest"))
+		assert.Contains(t, gotDetail, "USED BY")
 		assert.Contains(t, gotDetail, "web")
+	})
+
+	t.Run("shows none when no container uses the image", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		m.images = []Image{{ID: "img1", RepoTag: "nginx:latest", Size: 125_300_000}}
+		m.imgCursor = 0
+
+		gotDetail := m.renderImageDetail()
+
+		assert.Contains(t, gotDetail, "USED BY")
+		assert.Contains(t, gotDetail, styleDim.Render("none"))
+	})
+}
+
+func TestRenderVolumeDetail(t *testing.T) {
+	t.Parallel()
+
+	t.Run("contains name, driver, mount, created and used by", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		m.volumes = []Volume{{Name: "data", Driver: "local", Mountpoint: "/var/lib/docker/volumes/data", Created: "2024-01-01"}}
+		m.containers = []Container{{ID: "c1", Name: "web", Volumes: []string{"data"}}}
+		m.volCursor = 0
+
+		gotDetail := m.renderVolumeDetail()
+
+		assert.Contains(t, gotDetail, renderKV("name", "data"))
+		assert.Contains(t, gotDetail, renderKV("driver", "local"))
+		assert.Contains(t, gotDetail, renderKV("mount", "/var/lib/docker/volumes/data"))
+		assert.Contains(t, gotDetail, renderKV("created", "2024-01-01"))
+		assert.Contains(t, gotDetail, "USED BY")
+		assert.Contains(t, gotDetail, "web")
+	})
+
+	t.Run("shows none when no container uses the volume", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		m.volumes = []Volume{{Name: "data", Driver: "local"}}
+		m.volCursor = 0
+
+		gotDetail := m.renderVolumeDetail()
+
+		assert.Contains(t, gotDetail, "USED BY")
+		assert.Contains(t, gotDetail, styleDim.Render("none"))
+	})
+
+	t.Run("renders labels section sorted alphabetically", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		m.volumes = []Volume{{Name: "data", Driver: "local", Labels: map[string]string{"b": "2", "a": "1"}}}
+		m.volCursor = 0
+
+		gotDetail := m.renderVolumeDetail()
+
+		assert.Contains(t, gotDetail, "LABELS")
+		assert.Regexp(t, "a=1[\\s\\S]*b=2", gotDetail)
+	})
+}
+
+func TestRenderNetworkDetail(t *testing.T) {
+	t.Parallel()
+
+	t.Run("contains id, driver, subnet and used by", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		m.networks = []Network{{ID: "net1", Name: "app_net", Driver: "bridge", Subnet: "172.18.0.0/16"}}
+		m.containers = []Container{{ID: "c1", Name: "web", Networks: []string{"app_net"}}}
+		m.netCursor = 0
+
+		gotDetail := m.renderNetworkDetail()
+
+		assert.Contains(t, gotDetail, renderKV("id", shortID("net1")))
+		assert.Contains(t, gotDetail, renderKV("driver", "bridge"))
+		assert.Contains(t, gotDetail, renderKV("subnet", "172.18.0.0/16"))
+		assert.Contains(t, gotDetail, "USED BY")
+		assert.Contains(t, gotDetail, "web")
+	})
+
+	t.Run("shows none when no container uses the network", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		m.networks = []Network{{ID: "net1", Name: "app_net", Driver: "bridge"}}
+		m.netCursor = 0
+
+		gotDetail := m.renderNetworkDetail()
+
+		assert.Contains(t, gotDetail, "USED BY")
+		assert.Contains(t, gotDetail, styleDim.Render("none"))
 	})
 }
 

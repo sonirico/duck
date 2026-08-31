@@ -1845,22 +1845,10 @@ func (m Model) renderVolumeDetail() string {
 	v := vols[m.volCursor]
 
 	var b strings.Builder
-	b.WriteString("name: " + v.Name + "\n")
-	b.WriteString("driver: " + v.Driver + "\n")
-	b.WriteString("mountpoint: " + v.Mountpoint + "\n")
-	b.WriteString("created: " + v.Created + "\n")
-
-	if len(v.Labels) > 0 {
-		keys := make([]string, 0, len(v.Labels))
-		for k := range v.Labels {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		b.WriteString("labels:\n")
-		for _, k := range keys {
-			b.WriteString("  " + k + "=" + v.Labels[k] + "\n")
-		}
-	}
+	b.WriteString(renderKV("name", v.Name) + "\n")
+	b.WriteString(renderKV("driver", v.Driver) + "\n")
+	b.WriteString(renderKV("mount", v.Mountpoint) + "\n")
+	b.WriteString(renderKV("created", v.Created) + "\n")
 
 	var users []string
 	for _, c := range m.containers {
@@ -1871,10 +1859,24 @@ func (m Model) renderVolumeDetail() string {
 			}
 		}
 	}
+	b.WriteString("\n" + styleSection.Render("USED BY") + "\n")
 	if len(users) > 0 {
-		b.WriteString("used by:\n")
 		for _, name := range users {
 			b.WriteString("  " + name + "\n")
+		}
+	} else {
+		b.WriteString(styleDim.Render("none") + "\n")
+	}
+
+	if len(v.Labels) > 0 {
+		keys := make([]string, 0, len(v.Labels))
+		for k := range v.Labels {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		b.WriteString("\n" + styleSection.Render("LABELS") + "\n")
+		for _, k := range keys {
+			b.WriteString("  " + k + "=" + v.Labels[k] + "\n")
 		}
 	}
 
@@ -1916,9 +1918,11 @@ func (m Model) renderNetworkDetail() string {
 	n := nets[m.netCursor]
 
 	var b strings.Builder
-	b.WriteString("id: " + n.ID + "\n")
-	b.WriteString("driver: " + n.Driver + "\n")
-	b.WriteString("subnet: " + n.Subnet + "\n")
+	b.WriteString(renderKV("id", shortID(n.ID)) + "\n")
+	b.WriteString(renderKV("driver", n.Driver) + "\n")
+	if n.Subnet != "" {
+		b.WriteString(renderKV("subnet", n.Subnet) + "\n")
+	}
 
 	var users []string
 	for _, c := range m.containers {
@@ -1929,11 +1933,13 @@ func (m Model) renderNetworkDetail() string {
 			}
 		}
 	}
+	b.WriteString("\n" + styleSection.Render("USED BY") + "\n")
 	if len(users) > 0 {
-		b.WriteString("used by:\n")
 		for _, name := range users {
 			b.WriteString("  " + name + "\n")
 		}
+	} else {
+		b.WriteString(styleDim.Render("none") + "\n")
 	}
 
 	return strings.TrimRight(b.String(), "\n")
@@ -1961,9 +1967,9 @@ func (m Model) renderImageDetail() string {
 	img := imgs[m.imgCursor]
 
 	var b strings.Builder
-	b.WriteString("id: " + img.ID + "\n")
-	b.WriteString("repo:tag: " + img.RepoTag + "\n")
-	b.WriteString("size: " + formatImageSize(img.Size) + "\n")
+	b.WriteString(renderKV("id", shortID(img.ID)) + "\n")
+	b.WriteString(renderKV("repo:tag", img.RepoTag) + "\n")
+	b.WriteString(renderKV("size", formatImageSize(img.Size)) + "\n")
 
 	var users []string
 	for _, c := range m.containers {
@@ -1971,11 +1977,13 @@ func (m Model) renderImageDetail() string {
 			users = append(users, c.Name)
 		}
 	}
+	b.WriteString("\n" + styleSection.Render("USED BY") + "\n")
 	if len(users) > 0 {
-		b.WriteString("used by:\n")
 		for _, name := range users {
 			b.WriteString("  " + name + "\n")
 		}
+	} else {
+		b.WriteString(styleDim.Render("none") + "\n")
 	}
 
 	return strings.TrimRight(b.String(), "\n")
