@@ -3792,6 +3792,115 @@ func TestSubtabs(t *testing.T) {
 		assert.Equal(t, subEnv, m.subtab)
 		assert.Nil(t, cmd)
 	})
+
+	t.Run("l cycles through subVols and subNets before subInspect", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestSubtabModel(t)
+		m.rows = []row{{kind: rowContainer, key: "id:c1", container: Container{ID: "c1"}}}
+		m.cursor = 0
+		m.subtab = subStats
+
+		got, _ := m.updateKeys(newTestKeyMsg("l"))
+		m = got.(Model)
+		assert.Equal(t, subVols, m.subtab)
+
+		got, _ = m.updateKeys(newTestKeyMsg("l"))
+		m = got.(Model)
+		assert.Equal(t, subNets, m.subtab)
+
+		got, _ = m.updateKeys(newTestKeyMsg("l"))
+		m = got.(Model)
+		assert.Equal(t, subInspect, m.subtab)
+	})
+
+	t.Run("subVols without a cached extra shows loading", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestSubtabModel(t)
+		m.rows = []row{{kind: rowContainer, key: "id:c1", container: Container{ID: "c1", State: "running"}}}
+		m.cursor = 0
+		m.subtab = subVols
+		m.syncSubVP()
+
+		assert.Contains(t, m.View(), "loading...")
+	})
+
+	t.Run("subNets without a cached extra shows loading", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestSubtabModel(t)
+		m.rows = []row{{kind: rowContainer, key: "id:c1", container: Container{ID: "c1", State: "running"}}}
+		m.cursor = 0
+		m.subtab = subNets
+		m.syncSubVP()
+
+		assert.Contains(t, m.View(), "loading...")
+	})
+
+	t.Run("subVols with an injected empty extra shows no mounts", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestSubtabModel(t)
+		m.rows = []row{{kind: rowContainer, key: "id:c1", container: Container{ID: "c1", State: "running"}}}
+		m.cursor = 0
+		m.subtab = subVols
+		m.syncSubVP()
+
+		got, _ := m.Update(detailExtraMsg{id: "c1", extra: detailExtra{mountDetails: nil}})
+
+		assert.Contains(t, got.(Model).View(), "no mounts")
+	})
+
+	t.Run("subNets with an injected empty extra shows no networks", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestSubtabModel(t)
+		m.rows = []row{{kind: rowContainer, key: "id:c1", container: Container{ID: "c1", State: "running"}}}
+		m.cursor = 0
+		m.subtab = subNets
+		m.syncSubVP()
+
+		got, _ := m.Update(detailExtraMsg{id: "c1", extra: detailExtra{netDetails: nil}})
+
+		assert.Contains(t, got.(Model).View(), "no networks")
+	})
+
+	t.Run("subVols with an injected extra shows the mount name, destination and mode", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestSubtabModel(t)
+		m.rows = []row{{kind: rowContainer, key: "id:c1", container: Container{ID: "c1", State: "running"}}}
+		m.cursor = 0
+		m.subtab = subVols
+		m.syncSubVP()
+
+		extra := detailExtra{mountDetails: []mountDetail{{name: "data", destination: "/data", kind: "volume", rw: true}}}
+		got, _ := m.Update(detailExtraMsg{id: "c1", extra: extra})
+
+		gotView := got.(Model).View()
+		assert.Contains(t, gotView, "MOUNTS")
+		assert.Contains(t, gotView, "data -> /data")
+		assert.Contains(t, gotView, "(volume,rw)")
+	})
+
+	t.Run("subNets with an injected extra shows the network section and ip", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestSubtabModel(t)
+		m.rows = []row{{kind: rowContainer, key: "id:c1", container: Container{ID: "c1", State: "running"}}}
+		m.cursor = 0
+		m.subtab = subNets
+		m.syncSubVP()
+
+		extra := detailExtra{netDetails: []netDetail{{name: "app_default", ip: "172.18.0.2", gateway: "172.18.0.1"}}}
+		got, _ := m.Update(detailExtraMsg{id: "c1", extra: extra})
+
+		gotView := got.(Model).View()
+		assert.Contains(t, gotView, "APP_DEFAULT")
+		assert.Contains(t, gotView, "ip:")
+		assert.Contains(t, gotView, "172.18.0.2")
+	})
 }
 
 type testResourceClientWithInspectErr struct {

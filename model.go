@@ -67,6 +67,8 @@ const (
 	subEnv
 	subTop
 	subStats
+	subVols
+	subNets
 	subInspect
 )
 
@@ -75,7 +77,7 @@ var resourceSubtabs = []subtabID{subInfo, subInspect}
 func subtabsFor(kind rowKind) []subtabID {
 	switch kind {
 	case rowContainer:
-		return []subtabID{subLogs, subInfo, subEnv, subTop, subStats, subInspect}
+		return []subtabID{subLogs, subInfo, subEnv, subTop, subStats, subVols, subNets, subInspect}
 	case rowStack:
 		return []subtabID{subLogs, subInfo}
 	}
@@ -89,6 +91,8 @@ func renderSubtabBar(sel subtabID, kinds []subtabID) string {
 		subEnv:     "env",
 		subTop:     "top",
 		subStats:   "stats",
+		subVols:    "vols",
+		subNets:    "nets",
 		subInspect: "inspect",
 	}
 	parts := make([]string, len(kinds))
@@ -1328,6 +1332,10 @@ func (m *Model) syncSubVP() {
 		m.subVP.SetContent(m.renderTopDetail(r.container))
 	case subStats:
 		m.subVP.SetContent(m.renderStatsDetail(r.container))
+	case subVols:
+		m.subVP.SetContent(m.renderVolsDetail(r.container))
+	case subNets:
+		m.subVP.SetContent(m.renderNetsDetail(r.container))
 	case subInspect:
 		m.subVP.SetContent(m.renderInspectDetail(r.container))
 	case subLogs:
@@ -1351,7 +1359,7 @@ func (m *Model) statsTickStartCmd() tea.Cmd {
 }
 
 func (m Model) lazyExtraCmd() tea.Cmd {
-	if m.subtab != subEnv && m.subtab != subTop && m.subtab != subInspect {
+	if m.subtab != subEnv && m.subtab != subTop && m.subtab != subVols && m.subtab != subNets && m.subtab != subInspect {
 		return nil
 	}
 	if m.cursor < 0 || m.cursor >= len(m.rows) {
@@ -1683,6 +1691,55 @@ func (m Model) renderContainerDetail(c Container) string {
 	writeSection("MOUNTS", mounts)
 	writeSection("NETWORKS", c.Networks)
 
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func (m Model) renderVolsDetail(c Container) string {
+	var b strings.Builder
+	b.WriteString(styleSection.Render("MOUNTS") + "\n")
+
+	extra, ok := m.extras[c.ID]
+	if !ok {
+		b.WriteString(styleDim.Render("loading..."))
+		return b.String()
+	}
+	if len(extra.mountDetails) == 0 {
+		b.WriteString(styleDim.Render("no mounts"))
+		return b.String()
+	}
+	for _, d := range extra.mountDetails {
+		modo := "ro"
+		if d.rw {
+			modo = "rw"
+		}
+		b.WriteString("  " + d.name + " -> " + d.destination + " " + styleDim.Render("("+d.kind+","+modo+")") + "\n")
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func (m Model) renderNetsDetail(c Container) string {
+	extra, ok := m.extras[c.ID]
+	if !ok {
+		return styleSection.Render("NETWORKS") + "\n" + styleDim.Render("loading...")
+	}
+	if len(extra.netDetails) == 0 {
+		return styleSection.Render("NETWORKS") + "\n" + styleDim.Render("no networks")
+	}
+
+	var b strings.Builder
+	for _, d := range extra.netDetails {
+		b.WriteString(styleSection.Render(strings.ToUpper(d.name)) + "\n")
+		if d.ip != "" {
+			b.WriteString(renderKV("ip:", d.ip) + "\n")
+		}
+		if d.gateway != "" {
+			b.WriteString(renderKV("gateway:", d.gateway) + "\n")
+		}
+		if len(d.aliases) > 0 {
+			b.WriteString(renderKV("aliases:", strings.Join(d.aliases, ", ")) + "\n")
+		}
+		b.WriteString("\n")
+	}
 	return strings.TrimRight(b.String(), "\n")
 }
 
