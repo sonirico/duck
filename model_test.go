@@ -11,7 +11,10 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/image"
 	"github.com/moby/moby/api/types/mount"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/api/types/volume"
 	"github.com/moby/moby/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -37,6 +40,8 @@ type testResourceClient struct {
 	containerOpErr   error
 	containerInspect client.ContainerInspectResult
 	imageInspect     client.ImageInspectResult
+	volumeInspect    client.VolumeInspectResult
+	networkInspect   client.NetworkInspectResult
 	containerStats   func(ctx context.Context, containerID string, options client.ContainerStatsOptions) (client.ContainerStatsResult, error)
 	calls            []testResourceCall
 }
@@ -70,6 +75,16 @@ func (c *testResourceClient) VolumeRemove(ctx context.Context, volumeID string, 
 
 func (c *testResourceClient) NetworkRemove(ctx context.Context, networkID string, options client.NetworkRemoveOptions) (client.NetworkRemoveResult, error) {
 	return c.networkRemove(ctx, networkID, options)
+}
+
+func (c *testResourceClient) VolumeInspect(ctx context.Context, volumeID string, options client.VolumeInspectOptions) (client.VolumeInspectResult, error) {
+	c.calls = append(c.calls, testResourceCall{method: "volume-inspect", id: volumeID})
+	return c.volumeInspect, nil
+}
+
+func (c *testResourceClient) NetworkInspect(ctx context.Context, networkID string, options client.NetworkInspectOptions) (client.NetworkInspectResult, error) {
+	c.calls = append(c.calls, testResourceCall{method: "network-inspect", id: networkID})
+	return c.networkInspect, nil
 }
 
 func (c *testResourceClient) ImageRemove(ctx context.Context, imageID string, options client.ImageRemoveOptions) (client.ImageRemoveResult, error) {
@@ -592,7 +607,7 @@ func TestUpdateKeys(t *testing.T) {
 
 		gotModel := got.(Model)
 		assert.Equal(t, subInspect, gotModel.resSubtab)
-		assert.Nil(t, cmd)
+		assert.NotNil(t, cmd)
 		titlesRow := strings.Split(gotModel.View(), "\n")[1]
 		assert.Contains(t, titlesRow, "inspect")
 	})
@@ -611,7 +626,7 @@ func TestUpdateKeys(t *testing.T) {
 
 		gotModel := got.(Model)
 		assert.Equal(t, subInspect, gotModel.resSubtab)
-		assert.Nil(t, cmd)
+		assert.NotNil(t, cmd)
 	})
 
 	t.Run("l shows cached inspect content when resInspect already has the key", func(t *testing.T) {
@@ -3696,6 +3711,14 @@ func (c *testResourceClientWithInspectErr) NetworkRemove(ctx context.Context, ne
 	return client.NetworkRemoveResult{}, nil
 }
 
+func (c *testResourceClientWithInspectErr) VolumeInspect(ctx context.Context, volumeID string, options client.VolumeInspectOptions) (client.VolumeInspectResult, error) {
+	return client.VolumeInspectResult{}, nil
+}
+
+func (c *testResourceClientWithInspectErr) NetworkInspect(ctx context.Context, networkID string, options client.NetworkInspectOptions) (client.NetworkInspectResult, error) {
+	return client.NetworkInspectResult{}, nil
+}
+
 func (c *testResourceClientWithInspectErr) ImageRemove(ctx context.Context, imageID string, options client.ImageRemoveOptions) (client.ImageRemoveResult, error) {
 	return client.ImageRemoveResult{}, nil
 }
@@ -3892,6 +3915,134 @@ func TestLazyExtraCmd(t *testing.T) {
 		cmd := m.lazyExtraCmd()
 
 		assert.Nil(t, cmd)
+	})
+}
+
+func TestResourceInspectCmd(t *testing.T) {
+	t.Parallel()
+
+	t.Run("volume: entering inspect triggers VolumeInspect and renders the JSON", func(t *testing.T) {
+		t.Parallel()
+
+		resources := newTestResourceClient(nil)
+		resources.volumeInspect = client.VolumeInspectResult{Volume: volume.Volume{Name: "data-vol"}}
+		m := newTestModel(newTestLogRetargeter(), resources)
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+		m = got.(Model)
+		m.tab = tabVolumes
+		m.resSubtab = subInspect
+		m.volumes = []Volume{{Name: "data-vol"}}
+		m.volCursor = 0
+
+		cmd := m.resourceInspectCmd()
+
+		require.NotNil(t, cmd)
+		msg, ok := cmd().(resourceInspectMsg)
+		require.True(t, ok)
+		assert.Equal(t, "volume:data-vol", msg.key)
+		assert.Contains(t, msg.inspect, `"Name": "data-vol"`)
+		assert.Equal(t, []testResourceCall{{method: "volume-inspect", id: "data-vol"}}, resources.calls)
+
+		got, _ = m.Update(msg)
+		gotModel := got.(Model)
+		assert.Contains(t, gotModel.subVP.View(), `"Name": "data-vol"`)
+	})
+
+	t.Run("cached key returns nil cmd and does not call the SDK again", func(t *testing.T) {
+		t.Parallel()
+
+		resources := newTestResourceClient(nil)
+		resources.volumeInspect = client.VolumeInspectResult{Volume: volume.Volume{Name: "data-vol"}}
+		m := newTestModel(newTestLogRetargeter(), resources)
+		m.tab = tabVolumes
+		m.resSubtab = subInspect
+		m.volumes = []Volume{{Name: "data-vol"}}
+		m.volCursor = 0
+		m.resInspect = map[string]string{"volume:data-vol": "cached inspect output"}
+
+		cmd := m.resourceInspectCmd()
+
+		assert.Nil(t, cmd)
+		assert.Empty(t, resources.calls)
+	})
+
+	t.Run("network: entering inspect triggers NetworkInspect and renders the JSON", func(t *testing.T) {
+		t.Parallel()
+
+		resources := newTestResourceClient(nil)
+		resources.networkInspect = client.NetworkInspectResult{Network: network.Inspect{Network: network.Network{Name: "net1"}}}
+		m := newTestModel(newTestLogRetargeter(), resources)
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+		m = got.(Model)
+		m.tab = tabNetworks
+		m.resSubtab = subInspect
+		m.networks = []Network{{Name: "net1"}}
+		m.netCursor = 0
+
+		cmd := m.resourceInspectCmd()
+
+		require.NotNil(t, cmd)
+		msg, ok := cmd().(resourceInspectMsg)
+		require.True(t, ok)
+		assert.Equal(t, "network:net1", msg.key)
+		assert.Contains(t, msg.inspect, `"Name": "net1"`)
+		assert.Equal(t, []testResourceCall{{method: "network-inspect", id: "net1"}}, resources.calls)
+
+		got, _ = m.Update(msg)
+		gotModel := got.(Model)
+		assert.Contains(t, gotModel.subVP.View(), `"Name": "net1"`)
+	})
+
+	t.Run("image: entering inspect triggers ImageInspect and renders the JSON", func(t *testing.T) {
+		t.Parallel()
+
+		resources := newTestResourceClient(nil)
+		resources.imageInspect = client.ImageInspectResult{InspectResponse: image.InspectResponse{ID: "sha256:abc"}}
+		m := newTestModel(newTestLogRetargeter(), resources)
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+		m = got.(Model)
+		m.tab = tabImages
+		m.resSubtab = subInspect
+		m.images = []Image{{ID: "sha256:abc"}}
+		m.imgCursor = 0
+
+		cmd := m.resourceInspectCmd()
+
+		require.NotNil(t, cmd)
+		msg, ok := cmd().(resourceInspectMsg)
+		require.True(t, ok)
+		assert.Equal(t, "image:sha256:abc", msg.key)
+		assert.Contains(t, msg.inspect, `"Id": "sha256:abc"`)
+		assert.Equal(t, []testResourceCall{{method: "image-inspect", id: "sha256:abc"}}, resources.calls)
+
+		got, _ = m.Update(msg)
+		gotModel := got.(Model)
+		assert.Contains(t, gotModel.subVP.View(), `"Id": "sha256:abc"`)
+	})
+
+	t.Run("inspect error renders error: ... in the panel", func(t *testing.T) {
+		t.Parallel()
+
+		wantErr := errors.New("image inspect boom")
+		resources := newTestResourceClientWithImageInspectErr(wantErr)
+		m := newTestModel(newTestLogRetargeter(), resources)
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+		m = got.(Model)
+		m.tab = tabImages
+		m.resSubtab = subInspect
+		m.images = []Image{{ID: "sha256:abc"}}
+		m.imgCursor = 0
+
+		cmd := m.resourceInspectCmd()
+
+		require.NotNil(t, cmd)
+		msg, ok := cmd().(resourceInspectMsg)
+		require.True(t, ok)
+		assert.Equal(t, "error: "+wantErr.Error(), msg.inspect)
+
+		got, _ = m.Update(msg)
+		gotModel := got.(Model)
+		assert.Contains(t, gotModel.subVP.View(), "error: "+wantErr.Error())
 	})
 }
 

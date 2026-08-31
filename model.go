@@ -173,6 +173,11 @@ type detailExtraMsg struct {
 	extra detailExtra
 }
 
+type resourceInspectMsg struct {
+	key     string
+	inspect string
+}
+
 type logRetargeter interface {
 	SetTargets(ts []LogTarget)
 }
@@ -181,7 +186,9 @@ type logRetargeter interface {
 // mutate resources (e.g. deleting a volume).
 type resourceClient interface {
 	VolumeRemove(ctx context.Context, volumeID string, options client.VolumeRemoveOptions) (client.VolumeRemoveResult, error)
+	VolumeInspect(ctx context.Context, volumeID string, options client.VolumeInspectOptions) (client.VolumeInspectResult, error)
 	NetworkRemove(ctx context.Context, networkID string, options client.NetworkRemoveOptions) (client.NetworkRemoveResult, error)
+	NetworkInspect(ctx context.Context, networkID string, options client.NetworkInspectOptions) (client.NetworkInspectResult, error)
 	ContainerStart(ctx context.Context, containerID string, options client.ContainerStartOptions) (client.ContainerStartResult, error)
 	ContainerStop(ctx context.Context, containerID string, options client.ContainerStopOptions) (client.ContainerStopResult, error)
 	ContainerRestart(ctx context.Context, containerID string, options client.ContainerRestartOptions) (client.ContainerRestartResult, error)
@@ -347,6 +354,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.syncSubVP()
 		return m, nil
 
+	case resourceInspectMsg:
+		if m.resInspect == nil {
+			m.resInspect = make(map[string]string)
+		}
+		m.resInspect[msg.key] = msg.inspect
+		m.syncSubVP()
+		return m, nil
+
 	case composeMsg:
 		m.compose = msg.yaml
 		m.composeVP.SetContent(msg.yaml)
@@ -491,7 +506,7 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.resSubtab = resourceSubtabs[idx]
 		m.syncSubVP()
 		m.subVP.GotoTop()
-		return m, nil
+		return m, m.resourceInspectCmd()
 	}
 
 	if m.focus == focusList {
@@ -504,17 +519,17 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.tab = tabVolumes
 			m.confirm = nil
 			m.syncSubVP()
-			return m, nil
+			return m, m.resourceInspectCmd()
 		case "3":
 			m.tab = tabNetworks
 			m.confirm = nil
 			m.syncSubVP()
-			return m, nil
+			return m, m.resourceInspectCmd()
 		case "4":
 			m.tab = tabImages
 			m.confirm = nil
 			m.syncSubVP()
-			return m, nil
+			return m, m.resourceInspectCmd()
 		case "right":
 			m.tab = (m.tab + 1) % 4
 			m.confirm = nil
@@ -522,7 +537,7 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, m.retarget()
 			}
 			m.syncSubVP()
-			return m, nil
+			return m, m.resourceInspectCmd()
 		case "left":
 			m.tab = (m.tab + 3) % 4
 			m.confirm = nil
@@ -530,7 +545,7 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, m.retarget()
 			}
 			m.syncSubVP()
-			return m, nil
+			return m, m.resourceInspectCmd()
 		}
 	}
 
@@ -747,7 +762,7 @@ func (m Model) updateVolumeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "j", "down", "k", "up", "g", "G":
 		m.volCursor = moveListCursor(m.volCursor, len(m.filteredVolumes()), msg.String())
 		m.syncSubVP()
-		return m, nil
+		return m, m.resourceInspectCmd()
 	case "d":
 		vols := m.filteredVolumes()
 		if m.confirm != nil || m.volCursor < 0 || m.volCursor >= len(vols) {
@@ -801,7 +816,7 @@ func (m Model) updateNetworkKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "j", "down", "k", "up", "g", "G":
 		m.netCursor = moveListCursor(m.netCursor, len(m.filteredNetworks()), msg.String())
 		m.syncSubVP()
-		return m, nil
+		return m, m.resourceInspectCmd()
 	case "d":
 		nets := m.filteredNetworks()
 		if m.confirm != nil || m.netCursor < 0 || m.netCursor >= len(nets) {
@@ -855,7 +870,7 @@ func (m Model) updateImageKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "j", "down", "k", "up", "g", "G":
 		m.imgCursor = moveListCursor(m.imgCursor, len(m.filteredImages()), msg.String())
 		m.syncSubVP()
-		return m, nil
+		return m, m.resourceInspectCmd()
 	case "d":
 		imgs := m.filteredImages()
 		if m.confirm != nil || m.imgCursor < 0 || m.imgCursor >= len(imgs) {
@@ -1166,6 +1181,58 @@ func (m Model) resourceKey() string {
 		return "image:" + imgs[m.imgCursor].ID
 	}
 	return ""
+}
+
+func (m Model) resourceInspectCmd() tea.Cmd {
+	if m.tab == tabContainers || m.resSubtab != subInspect {
+		return nil
+	}
+	key := m.resourceKey()
+	if key == "" {
+		return nil
+	}
+	if _, ok := m.resInspect[key]; ok {
+		return nil
+	}
+	tab := m.tab
+	resources := m.resources
+	var id string
+	switch tab {
+	case tabVolumes:
+		id = m.filteredVolumes()[m.volCursor].Name
+	case tabNetworks:
+		id = m.filteredNetworks()[m.netCursor].Name
+	case tabImages:
+		id = m.filteredImages()[m.imgCursor].ID
+	}
+	return func() tea.Msg {
+		var payload any
+		switch tab {
+		case tabVolumes:
+			res, err := resources.VolumeInspect(context.Background(), id, client.VolumeInspectOptions{})
+			if err != nil {
+				return resourceInspectMsg{key: key, inspect: "error: " + err.Error()}
+			}
+			payload = res.Volume
+		case tabNetworks:
+			res, err := resources.NetworkInspect(context.Background(), id, client.NetworkInspectOptions{})
+			if err != nil {
+				return resourceInspectMsg{key: key, inspect: "error: " + err.Error()}
+			}
+			payload = res.Network
+		case tabImages:
+			res, err := resources.ImageInspect(context.Background(), id)
+			if err != nil {
+				return resourceInspectMsg{key: key, inspect: "error: " + err.Error()}
+			}
+			payload = res.InspectResponse
+		}
+		b, err := json.MarshalIndent(payload, "", "  ")
+		if err != nil {
+			return resourceInspectMsg{key: key, inspect: "error: " + err.Error()}
+		}
+		return resourceInspectMsg{key: key, inspect: string(b)}
+	}
 }
 
 func (m *Model) syncSubVP() {
