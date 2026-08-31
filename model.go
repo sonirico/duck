@@ -1798,7 +1798,7 @@ func (m Model) renderStackDetail(project string) string {
 }
 
 func resourceFooter(confirm *pendingDelete, hint string) string {
-	footer := " j/k move  left/right tab  d delete  P prune  q quit"
+	footer := " j/k move  h/l view  tab focus  left/right tab  d delete  P prune  q quit"
 	if confirm != nil {
 		footer += "  delete " + confirm.label + "? y/n"
 	} else if hint != "" {

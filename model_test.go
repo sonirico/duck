@@ -1823,7 +1823,7 @@ func TestPruneKeys(t *testing.T) {
 func TestResourceFooter(t *testing.T) {
 	t.Parallel()
 
-	const base = " j/k move  left/right tab  d delete  P prune  q quit"
+	const base = " j/k move  h/l view  tab focus  left/right tab  d delete  P prune  q quit"
 
 	tests := []struct {
 		name    string
