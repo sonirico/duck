@@ -3888,6 +3888,19 @@ func TestSubtabs(t *testing.T) {
 		assert.Contains(t, gotView, "ip:")
 		assert.Contains(t, gotView, "172.18.0.2")
 	})
+
+	t.Run("subNets with an injected extra shows the aliases", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestSubtabViewModel(t, subNets)
+
+		extra := detailExtra{netDetails: []netDetail{{name: "app_default", ip: "172.18.0.2", aliases: []string{"web", "web-1"}}}}
+		got, _ := m.Update(detailExtraMsg{id: "c1", extra: extra})
+
+		gotView := got.(Model).View()
+		assert.Contains(t, gotView, "aliases:")
+		assert.Contains(t, gotView, "web, web-1")
+	})
 }
 
 type testResourceClientWithInspectErr struct {
