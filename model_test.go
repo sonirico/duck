@@ -4729,3 +4729,129 @@ func TestFilter(t *testing.T) {
 		}
 	})
 }
+
+func typeCommand(m Model, text string) Model {
+	got, _ := m.updateKeys(newTestKeyMsg(":"))
+	m = got.(Model)
+	for _, ch := range text {
+		got, _ := m.updateKeys(newTestKeyMsg(string(ch)))
+		m = got.(Model)
+	}
+	return m
+}
+
+func TestCommandMode(t *testing.T) {
+	t.Parallel()
+
+	t.Run(": opens the prompt and the footer shows it", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+		m = got.(Model)
+
+		got, _ = m.updateKeys(newTestKeyMsg(":"))
+		m = got.(Model)
+
+		assert.True(t, m.commanding)
+		assert.Contains(t, m.View(), " cmd: :")
+	})
+
+	t.Run("typing vo and enter jumps to the volumes tab", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		m.tab = tabContainers
+
+		m = typeCommand(m, "vo")
+		got, _ := m.updateKeys(newTestKeyMsg("enter"))
+		m = got.(Model)
+
+		assert.False(t, m.commanding)
+		assert.Equal(t, "", m.command)
+		assert.Equal(t, tabVolumes, m.tab)
+	})
+
+	t.Run("a unique prefix jumps to the matching tab", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		m.tab = tabContainers
+
+		m = typeCommand(m, "n")
+		got, _ := m.updateKeys(newTestKeyMsg("enter"))
+		m = got.(Model)
+
+		assert.Equal(t, tabNetworks, m.tab)
+	})
+
+	t.Run("an input with no unique match closes the prompt without changing tab", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		m.tab = tabContainers
+
+		m = typeCommand(m, "x")
+		got, _ := m.updateKeys(newTestKeyMsg("enter"))
+		m = got.(Model)
+
+		assert.False(t, m.commanding)
+		assert.Equal(t, "", m.command)
+		assert.Equal(t, tabContainers, m.tab)
+	})
+
+	t.Run("esc closes the prompt without changing tab", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		m.tab = tabContainers
+
+		m = typeCommand(m, "vo")
+		got, _ := m.updateKeys(newTestKeyMsg("esc"))
+		m = got.(Model)
+
+		assert.False(t, m.commanding)
+		assert.Equal(t, "", m.command)
+		assert.Equal(t, tabContainers, m.tab)
+	})
+
+	t.Run("backspace deletes the last rune", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+
+		m = typeCommand(m, "vol")
+		got, _ := m.updateKeys(newTestKeyMsg("backspace"))
+		m = got.(Model)
+
+		assert.Equal(t, "vo", m.command)
+	})
+
+	t.Run("1-4 and left/right still switch tabs after the gotoTab refactor", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		m.focus = focusList
+		m.tab = tabContainers
+
+		got, _ := m.updateKeys(newTestKeyMsg("2"))
+		m = got.(Model)
+		assert.Equal(t, tabVolumes, m.tab)
+
+		got, _ = m.updateKeys(newTestKeyMsg("right"))
+		m = got.(Model)
+		assert.Equal(t, tabNetworks, m.tab)
+
+		got, _ = m.updateKeys(newTestKeyMsg("left"))
+		m = got.(Model)
+		assert.Equal(t, tabVolumes, m.tab)
+
+		got, _ = m.updateKeys(newTestKeyMsg("4"))
+		m = got.(Model)
+		assert.Equal(t, tabImages, m.tab)
+
+		got, _ = m.updateKeys(newTestKeyMsg("1"))
+		m = got.(Model)
+		assert.Equal(t, tabContainers, m.tab)
+	})
+}
