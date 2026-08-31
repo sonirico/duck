@@ -597,6 +597,42 @@ func TestUpdateKeys(t *testing.T) {
 		assert.Contains(t, titlesRow, "inspect")
 	})
 
+	t.Run("h cycles resSubtab back to inspect in tabVolumes", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+		m = got.(Model)
+		m.tab = tabVolumes
+		m.volumes = []Volume{{Name: "data"}}
+		m.volCursor = 0
+
+		got, cmd := m.updateKeys(newTestKeyMsg("h"))
+
+		gotModel := got.(Model)
+		assert.Equal(t, subInspect, gotModel.resSubtab)
+		assert.Nil(t, cmd)
+	})
+
+	t.Run("l shows cached inspect content when resInspect already has the key", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		got, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+		m = got.(Model)
+		m.tab = tabVolumes
+		m.volumes = []Volume{{Name: "data"}}
+		m.volCursor = 0
+		m.resInspect = map[string]string{"volume:data": "cached inspect output"}
+
+		got, cmd := m.updateKeys(newTestKeyMsg("l"))
+
+		gotModel := got.(Model)
+		assert.Equal(t, subInspect, gotModel.resSubtab)
+		assert.Nil(t, cmd)
+		assert.Contains(t, gotModel.subVP.View(), "cached inspect output")
+	})
+
 	t.Run("networks tab delegates other keys to updateNetworkKeys", func(t *testing.T) {
 		t.Parallel()
 
@@ -1339,6 +1375,20 @@ func TestUpdateVolumeKeys(t *testing.T) {
 			})
 		}
 	})
+
+	t.Run("an unrecognized key while focus is on the right pane forwards to the subVP without moving volCursor", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		m.focus = focusLogs
+		m.volumes = []Volume{{Name: "data"}, {Name: "cache"}}
+		m.volCursor = 1
+
+		got, cmd := m.updateVolumeKeys(newTestKeyMsg("x"))
+
+		assert.Equal(t, 1, got.(Model).volCursor)
+		assert.Nil(t, cmd)
+	})
 }
 
 func TestUpdateImageKeys(t *testing.T) {
@@ -1589,6 +1639,54 @@ func TestUpdateImageKeys(t *testing.T) {
 				assert.Nil(t, cmd)
 			})
 		}
+	})
+
+	t.Run("g and G scroll the subVP without moving imgCursor when focus is on the right pane", func(t *testing.T) {
+		t.Parallel()
+
+		for _, key := range []string{"g", "G"} {
+			t.Run(key, func(t *testing.T) {
+				t.Parallel()
+
+				m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+				m.focus = focusLogs
+				m.images = []Image{{ID: "a"}, {ID: "b"}}
+				m.imgCursor = 1
+
+				got, cmd := m.updateImageKeys(newTestKeyMsg(key))
+
+				assert.Equal(t, 1, got.(Model).imgCursor)
+				assert.Nil(t, cmd)
+			})
+		}
+	})
+
+	t.Run("an unrecognized key while focus is on the right pane forwards to the subVP without moving imgCursor", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		m.focus = focusLogs
+		m.images = []Image{{ID: "a"}, {ID: "b"}}
+		m.imgCursor = 1
+
+		got, cmd := m.updateImageKeys(newTestKeyMsg("x"))
+
+		assert.Equal(t, 1, got.(Model).imgCursor)
+		assert.Nil(t, cmd)
+	})
+
+	t.Run("esc returns resSubtab to info", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		m.images = []Image{{ID: "a"}}
+		m.imgCursor = 0
+		m.resSubtab = subInspect
+
+		got, cmd := m.updateImageKeys(newTestKeyMsg("esc"))
+
+		assert.Equal(t, subInfo, got.(Model).resSubtab)
+		assert.Nil(t, cmd)
 	})
 }
 
@@ -1886,6 +1984,93 @@ func TestVisibleWindow(t *testing.T) {
 			got := visibleWindow(tc.lines, tc.cursor, tc.height)
 
 			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestResourceKey(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		tab   tabID
+		model func(m Model) Model
+		want  string
+	}{
+		{
+			name: "tabVolumes returns a volume-prefixed key",
+			tab:  tabVolumes,
+			model: func(m Model) Model {
+				m.volumes = []Volume{{Name: "data"}}
+				m.volCursor = 0
+				return m
+			},
+			want: "volume:data",
+		},
+		{
+			name: "tabVolumes with an out-of-range cursor returns empty",
+			tab:  tabVolumes,
+			model: func(m Model) Model {
+				m.volCursor = -1
+				return m
+			},
+			want: "",
+		},
+		{
+			name: "tabNetworks returns a network-prefixed key",
+			tab:  tabNetworks,
+			model: func(m Model) Model {
+				m.networks = []Network{{Name: "app-net"}}
+				m.netCursor = 0
+				return m
+			},
+			want: "network:app-net",
+		},
+		{
+			name: "tabNetworks with an out-of-range cursor returns empty",
+			tab:  tabNetworks,
+			model: func(m Model) Model {
+				m.netCursor = -1
+				return m
+			},
+			want: "",
+		},
+		{
+			name: "tabImages returns an image-prefixed key",
+			tab:  tabImages,
+			model: func(m Model) Model {
+				m.images = []Image{{ID: "img1"}}
+				m.imgCursor = 0
+				return m
+			},
+			want: "image:img1",
+		},
+		{
+			name: "tabImages with an out-of-range cursor returns empty",
+			tab:  tabImages,
+			model: func(m Model) Model {
+				m.imgCursor = -1
+				return m
+			},
+			want: "",
+		},
+		{
+			name:  "tabContainers returns empty",
+			tab:   tabContainers,
+			model: func(m Model) Model { return m },
+			want:  "",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+			m.tab = tc.tab
+			m = tc.model(m)
+
+			assert.Equal(t, tc.want, m.resourceKey())
 		})
 	}
 }
@@ -2444,6 +2629,54 @@ func TestUpdateNetworkKeys(t *testing.T) {
 		require.NotNil(t, cmd)
 		assert.Nil(t, cmd())
 		assert.Equal(t, "n1", gotID)
+	})
+
+	t.Run("g and G scroll the subVP without moving netCursor when focus is on the right pane", func(t *testing.T) {
+		t.Parallel()
+
+		for _, key := range []string{"g", "G"} {
+			t.Run(key, func(t *testing.T) {
+				t.Parallel()
+
+				m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+				m.focus = focusLogs
+				m.networks = []Network{{Name: "a"}, {Name: "b"}}
+				m.netCursor = 1
+
+				got, cmd := m.updateNetworkKeys(newTestKeyMsg(key))
+
+				assert.Equal(t, 1, got.(Model).netCursor)
+				assert.Nil(t, cmd)
+			})
+		}
+	})
+
+	t.Run("an unrecognized key while focus is on the right pane forwards to the subVP without moving netCursor", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		m.focus = focusLogs
+		m.networks = []Network{{Name: "a"}, {Name: "b"}}
+		m.netCursor = 1
+
+		got, cmd := m.updateNetworkKeys(newTestKeyMsg("x"))
+
+		assert.Equal(t, 1, got.(Model).netCursor)
+		assert.Nil(t, cmd)
+	})
+
+	t.Run("esc returns resSubtab to info", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		m.networks = []Network{{Name: "a"}}
+		m.netCursor = 0
+		m.resSubtab = subInspect
+
+		got, cmd := m.updateNetworkKeys(newTestKeyMsg("esc"))
+
+		assert.Equal(t, subInfo, got.(Model).resSubtab)
+		assert.Nil(t, cmd)
 	})
 }
 
@@ -3126,6 +3359,19 @@ func TestSubtabs(t *testing.T) {
 		got, _ = m.updateKeys(newTestKeyMsg("["))
 		m = got.(Model)
 		assert.Equal(t, subInspect, m.subtab)
+	})
+
+	t.Run("] is a no-op with an out-of-range cursor", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestSubtabModel(t)
+		m.rows = nil
+		m.cursor = 0
+
+		got, cmd := m.updateKeys(newTestKeyMsg("]"))
+
+		assert.Equal(t, subLogs, got.(Model).subtab)
+		assert.Nil(t, cmd)
 	})
 
 	t.Run("over a stack row ] only alternates logs and info", func(t *testing.T) {
