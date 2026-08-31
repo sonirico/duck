@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net/netip"
 	"strings"
 	"testing"
 
@@ -3994,8 +3995,18 @@ func TestDetailExtraCmdMounts(t *testing.T) {
 
 	client := newTestResourceClient(nil)
 	client.containerInspect.Container.Mounts = []container.MountPoint{
-		{Type: mount.TypeBind, Source: "/host/path", Destination: "/data"},
-		{Type: mount.TypeVolume, Name: "db-data", Destination: "/var/lib/data"},
+		{Type: mount.TypeBind, Source: "/host/path", Destination: "/data", RW: false},
+		{Type: mount.TypeVolume, Name: "db-data", Destination: "/var/lib/data", RW: true},
+	}
+	client.containerInspect.Container.NetworkSettings = &container.NetworkSettings{
+		Networks: map[string]*network.EndpointSettings{
+			"bridge": {
+				IPAddress: netip.MustParseAddr("172.17.0.2"),
+				Gateway:   netip.MustParseAddr("172.17.0.1"),
+				Aliases:   []string{"web", "web-1"},
+			},
+			"empty": {},
+		},
 	}
 	m := newTestModel(newTestLogRetargeter(), client)
 
@@ -4005,6 +4016,14 @@ func TestDetailExtraCmdMounts(t *testing.T) {
 	got, ok := cmd().(detailExtraMsg)
 	require.True(t, ok)
 	assert.Equal(t, []string{"/host/path -> /data", "db-data -> /var/lib/data"}, got.extra.mounts)
+	assert.Equal(t, []mountDetail{
+		{name: "/host/path", destination: "/data", kind: "bind", rw: false},
+		{name: "db-data", destination: "/var/lib/data", kind: "volume", rw: true},
+	}, got.extra.mountDetails)
+	assert.Equal(t, []netDetail{
+		{name: "bridge", ip: "172.17.0.2", gateway: "172.17.0.1", aliases: []string{"web", "web-1"}},
+		{name: "empty", ip: "", gateway: "", aliases: nil},
+	}, got.extra.netDetails)
 }
 
 func TestLazyExtraCmd(t *testing.T) {

@@ -160,12 +160,28 @@ type composeMsg struct {
 	yaml string
 }
 
+type mountDetail struct {
+	name        string
+	destination string
+	kind        string
+	rw          bool
+}
+
+type netDetail struct {
+	name    string
+	ip      string
+	gateway string
+	aliases []string
+}
+
 type detailExtra struct {
-	env     []string
-	titles  []string
-	procs   [][]string
-	mounts  []string
-	inspect string
+	env          []string
+	titles       []string
+	procs        [][]string
+	mounts       []string
+	mountDetails []mountDetail
+	netDetails   []netDetail
+	inspect      string
 }
 
 type detailExtraMsg struct {
@@ -1151,11 +1167,48 @@ func (m Model) detailExtraCmd(id string, running bool) tea.Cmd {
 			mounts = append(mounts, entry)
 		}
 		sort.Strings(mounts)
+		var mountDetails []mountDetail
+		for _, mp := range res.Container.Mounts {
+			name := mp.Source
+			if mp.Type == mount.TypeVolume {
+				name = mp.Name
+			}
+			mountDetails = append(mountDetails, mountDetail{
+				name:        name,
+				destination: mp.Destination,
+				kind:        string(mp.Type),
+				rw:          mp.RW,
+			})
+		}
+		sort.Slice(mountDetails, func(i, j int) bool {
+			return mountDetails[i].destination < mountDetails[j].destination
+		})
+		var netDetails []netDetail
+		if res.Container.NetworkSettings != nil {
+			for name, es := range res.Container.NetworkSettings.Networks {
+				var ip, gateway string
+				if es.IPAddress.IsValid() {
+					ip = es.IPAddress.String()
+				}
+				if es.Gateway.IsValid() {
+					gateway = es.Gateway.String()
+				}
+				netDetails = append(netDetails, netDetail{
+					name:    name,
+					ip:      ip,
+					gateway: gateway,
+					aliases: es.Aliases,
+				})
+			}
+		}
+		sort.Slice(netDetails, func(i, j int) bool {
+			return netDetails[i].name < netDetails[j].name
+		})
 		inspect, err := json.MarshalIndent(res.Container, "", "  ")
 		if err != nil {
 			return watcherErrMsg{err: err}
 		}
-		return detailExtraMsg{id: id, extra: detailExtra{env: res.Container.Config.Env, titles: titles, procs: procs, mounts: mounts, inspect: string(inspect)}}
+		return detailExtraMsg{id: id, extra: detailExtra{env: res.Container.Config.Env, titles: titles, procs: procs, mounts: mounts, mountDetails: mountDetails, netDetails: netDetails, inspect: string(inspect)}}
 	}
 }
 
