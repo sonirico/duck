@@ -4800,6 +4800,20 @@ func TestCommandMode(t *testing.T) {
 		assert.Equal(t, tabContainers, m.tab)
 	})
 
+	t.Run("enter on an empty prompt closes it without changing tab", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestModel(newTestLogRetargeter(), newTestResourceClient(nil))
+		m.tab = tabContainers
+
+		m = typeCommand(m, "")
+		got, _ := m.updateKeys(newTestKeyMsg("enter"))
+		m = got.(Model)
+
+		assert.False(t, m.commanding)
+		assert.Equal(t, tabContainers, m.tab)
+	})
+
 	t.Run("esc closes the prompt without changing tab", func(t *testing.T) {
 		t.Parallel()
 
