@@ -20,7 +20,7 @@ A terminal UI for Docker: live container tree, aggregated stack logs, and intera
 - **Images tab**: press 4 to list images with repo:tag, size and usage; unused images can be deleted with a y/n confirmation.
 - **Container lifecycle operations**: stop, start, restart, pause/unpause, kill and remove (with a y/n confirmation) the selected container directly from the list. Stop, start, restart, kill and remove also apply to an entire selected stack.
 - **Compose view**: press `y` to view the docker-compose file reconstructed from the Docker API, without reading the filesystem.
-- **Detail view**: press `enter` on a stack or container to see its services, ports, volumes, networks and environment variables, without extra calls to the daemon. For running containers it also shows a live CPU and memory sample, and the running processes (top), taken once per detail open.
+- **Right panel subtabs**: the right panel switches between `logs`, `info`, `env`, `top`, `stats` and `inspect` views, cycled with `[` / `]`. `enter` on a stack or container jumps to the `info` view; `esc` returns to `logs`. `info` lists services, ports, volumes, networks and mounts (`source -> dest`); `stats` shows a live CPU/memory sample that refreshes every 2s while visible.
 - **Prune per tab**: press `P` to prune the active tab's resource (stopped containers, dangling images, unused volumes or unused networks), with a y/n confirmation.
 - **Incremental filter**: press `/` in any tab to filter the list by substring (case-insensitive) as you type. `esc` clears the filter, `enter` confirms it.
 
@@ -71,8 +71,9 @@ just build
 | `d`       | container list | remove the selected container or stack (asks y/n) |
 | `y`       | container list | view the reconstructed docker-compose |
 | `esc`     | compose view | close the compose view                |
-| `enter`   | container list | open the detail view for the selected stack/container |
-| `esc`     | detail view | close the detail view                |
+| `[` / `]` | container list | cycle the right panel's view       |
+| `enter`   | container list | open the info view for the selected stack/container |
+| `esc`     | right panel | back to logs                          |
 | `q`       | anywhere    | quit                      |
 | `j` / `k` | logs panel  | scroll                    |
 | `g`       | logs panel  | jump to top, stop following |

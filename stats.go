@@ -2,9 +2,13 @@ package main
 
 import (
 	"fmt"
+	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/moby/moby/api/types/container"
 )
+
+const statsInterval = 2 * time.Second
 
 type ContainerStat struct {
 	ID         string
@@ -15,6 +19,12 @@ type ContainerStat struct {
 
 type statsMsg struct {
 	stats []ContainerStat
+}
+
+type statsTickMsg struct{}
+
+func statsTickCmd() tea.Cmd {
+	return tea.Tick(statsInterval, func(time.Time) tea.Msg { return statsTickMsg{} })
 }
 
 func newContainerStatFromResponse(id string, r container.StatsResponse) ContainerStat {
